@@ -1,0 +1,30 @@
+[package]
+name = "criu-image-streamer"
+version = "1.0.0"
+authors = ["Nicolas Viennot <Nicolas.Viennot@twosigma.com>"]
+description = "Captures and extracts CRIU images via UNIX pipes"
+edition = "2018"
+license = "Apache-2.0"
+
+[dependencies]
+structopt = { version = "0.3", default-features = false }
+anyhow = "1.0"
+slab = "0.4"
+libc = "0.2"
+prost = "0.6"
+bytes = "0.5"
+nix = "0.17"
+lazy_static = "1.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[build-dependencies]
+prost-build = "0.6" # to generate protobuf wrappers
+
+[dev-dependencies]
+procinfo = "0.4" # to measure memory usage
+crossbeam-utils = "0.7" # for scoped threads
+
+[profile.release]
+lto = true
+codegen-units = 1
