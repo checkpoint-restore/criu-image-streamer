@@ -281,6 +281,7 @@ Acknowledgments
 * Author: Nicolas Viennot [@nviennot](https://github.com/nviennot)
 * Reviewer: Vitaly Davidovich [@vitalyd](https://github.com/vitalyd)
 * Reviewer: Peter Burka [@pburka](https://github.com/pburka)
+* Developed as a [Two Sigma Open Source](https://opensource.twosigma.com) initiative
 
 License
 -------
