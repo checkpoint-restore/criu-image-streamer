@@ -21,94 +21,62 @@ use std::{
 use anyhow::{Result, Context};
 use criu_image_streamer::{
     criu,
-    util::{pb_read, pb_read_next, pb_write},
+    util::{pb_read, pb_write},
     unix_pipe::UnixPipe,
 };
 use crate::helpers::util::*;
 
-// These constants can be seen in the CRIU source code at criu/include/img-remote.h
-const NULL_SNAPSHOT_ID: &str = "";
-const FINISH: &str = "";
-const PARENT_IMG: &str = "parent";
-
 /// For test purposes, we implement a CRIU simulator
-pub struct CRIU {
-    socket_path: PathBuf,
+pub struct Criu {
+    socket: UnixStream,
 }
 
-impl CRIU {
-    pub fn new(socket_path: PathBuf) -> Self {
-        Self { socket_path }
+impl Criu {
+    pub fn connect(socket_path: PathBuf) -> Result<Self> {
+        let socket = UnixStream::connect(&socket_path)
+            .with_context(|| format!("Failed to connect to {}", socket_path.display()))?;
+        Ok(Self { socket })
     }
 
-    fn connect(&self, snapshot_id: &str, name: &str, open_mode: u32) -> Result<UnixStream> {
-        let mut socket = UnixStream::connect(&self.socket_path)
-            .with_context(|| format!("Can't connect to {}", self.socket_path.display()))?;
-        let snapshot_id = snapshot_id.to_string();
-        let name = name.to_string();
-        pb_write(&mut socket, &criu::LocalImageEntry { snapshot_id, name, open_mode })
-            .with_context(|| "Can't write to CRIU socket")?;
-        Ok(socket)
+    fn read_file_reply(&mut self) -> Result<bool> {
+        let reply: criu::ImgStreamerReplyEntry = pb_read(&mut self.socket)?;
+        Ok(reply.exists)
     }
 
-    fn read_reply(socket: &mut UnixStream) -> Result<u32> {
-        let reply: criu::LocalImageReplyEntry = pb_read(socket)?;
-        return Ok(reply.error)
-    }
-
-    pub fn finish(&self) -> Result<()> {
-        self.connect(NULL_SNAPSHOT_ID, FINISH, 0)?;
+    pub fn finish(self) -> Result<()> {
+        // drops the connection
         Ok(())
     }
 
-    pub fn append_snapshot_id(&self, snapshot_id: &str) -> Result<()> {
-        let mut socket = self.connect(NULL_SNAPSHOT_ID, PARENT_IMG, libc::O_APPEND as u32)?;
-        let snapshot_id = snapshot_id.to_string();
-        pb_write(&mut socket, &criu::SnapshotIdEntry { snapshot_id })?;
-        Ok(())
-    }
-
-    pub fn get_snapshot_ids(&self) -> Result<Vec<String>> {
-        let mut socket = self.connect(NULL_SNAPSHOT_ID, PARENT_IMG, libc::O_RDONLY as u32)?;
-        ensure!(Self::read_reply(&mut socket)? == 0, "Bad reply for get_snapshot_ids()");
-
-        let mut snapshot_ids = Vec::new();
-        while let Some((entry, _)) = pb_read_next::<_, criu::SnapshotIdEntry>(&mut socket)? {
-            snapshot_ids.push(entry.snapshot_id)
-        }
-
-        Ok(snapshot_ids)
-    }
-
-    pub fn write_img_file(&self, snapshot_id: &str, filename: &str) -> Result<UnixPipe> {
-        let mut socket = self.connect(snapshot_id, filename, libc::O_WRONLY as u32)?;
+    pub fn write_img_file(&mut self, filename: &str) -> Result<UnixPipe> {
+        let filename = filename.to_string();
+        pb_write(&mut self.socket, &criu::ImgStreamerRequestEntry { filename })?;
         let (pipe_r, pipe_w) = new_pipe();
-        send_fd(&mut socket, pipe_r.as_raw_fd())?;
+        send_fd(&mut self.socket, pipe_r.as_raw_fd())?;
         Ok(pipe_w)
     }
 
-    pub fn maybe_read_img_file(&self, snapshot_id: &str, filename: &str) -> Result<Option<UnixPipe>> {
-        let mut socket = self.connect(snapshot_id, filename, libc::O_RDONLY as u32)?;
+    pub fn maybe_read_img_file(&mut self, filename: &str) -> Result<Option<UnixPipe>> {
+        let filename = filename.to_string();
+        pb_write(&mut self.socket, &criu::ImgStreamerRequestEntry { filename })?;
 
-        match Self::read_reply(&mut socket)? as i32 {
-            0 => {},
-            libc::ENOENT => return Ok(None),
-            _ => return Err(anyhow!("Bad response during read_img_file()")),
+        if self.read_file_reply()? {
+            let (pipe_r, pipe_w) = new_pipe();
+            send_fd(&mut self.socket, pipe_w.as_raw_fd())?;
+            Ok(Some(pipe_r))
+        } else {
+            Ok(None)
         }
-
-        let (pipe_r, pipe_w) = new_pipe();
-        send_fd(&mut socket, pipe_w.as_raw_fd())?;
-        Ok(Some(pipe_r))
     }
 
-    pub fn read_img_file(&self, snapshot_id: &str, filename: &str) -> Result<UnixPipe> {
-        self.maybe_read_img_file(snapshot_id, filename)?
+    pub fn read_img_file(&mut self, filename: &str) -> Result<UnixPipe> {
+        self.maybe_read_img_file(filename)?
             .ok_or_else(|| anyhow!("Requested file does not exists"))
     }
 
-    pub fn read_img_file_into_vec(&self, snapshot_id: &str, filename: &str) -> Result<Vec<u8>> {
+    pub fn read_img_file_into_vec(&mut self, filename: &str) -> Result<Vec<u8>> {
         let mut buf = Vec::new();
-        self.read_img_file(snapshot_id, filename)?.read_to_end(&mut buf)?;
+        self.read_img_file(filename)?.read_to_end(&mut buf)?;
         Ok(buf)
     }
 }

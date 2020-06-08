@@ -14,7 +14,7 @@
 
 
 fn main() {
-    prost_build::compile_protos(&["proto/remote-image.proto",
+    prost_build::compile_protos(&["proto/img-streamer.proto",
                                   "proto/image.proto"],
                                 &["proto/"])
         .expect("Failed to generate protobuf wrappers");

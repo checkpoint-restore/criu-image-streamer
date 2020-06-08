@@ -81,7 +81,7 @@ impl UnixPipeImpl for UnixPipe {
     fn set_capacity_no_eperm(&mut self, capacity: i32) -> Result<()> {
         match self.set_capacity(capacity) {
             Err(Error::Sys(Errno::EPERM)) => {
-                warn_capacity_eperm();
+                warn_once_capacity_eperm();
                 Ok(())
             }
             other => other,
@@ -98,7 +98,7 @@ impl UnixPipeImpl for UnixPipe {
         loop {
             match pipes.iter_mut().try_for_each(|pipe| pipe.set_capacity(capacity)) {
                 Err(Error::Sys(Errno::EPERM)) => {
-                    warn_capacity_eperm();
+                    warn_once_capacity_eperm();
                     assert!(capacity > *PAGE_SIZE as i32);
                     capacity /= 2;
                     continue;
@@ -142,11 +142,11 @@ impl UnixPipeImpl for UnixPipe {
     }
 }
 
-fn warn_capacity_eperm() {
+fn warn_once_capacity_eperm() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         eprintln!("Cannot set pipe size as desired (EPERM). \
                    Continuing with smaller pipe sizes but performance may be reduced. \
-                   See the Deploy section in the README for a remedy.");
+                   See the Deploy section in the criu-image-streamer README for a remedy.");
     });
 }
