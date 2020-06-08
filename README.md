@@ -95,14 +95,14 @@ sleep 10 & # The app to be checkpointed
 APP_PID=$!
 
 criu-image-streamer --images-dir /tmp capture | lz4 -f - /tmp/img.lz4 &
-criu dump --images-dir /tmp --remote --shell-job --tree $APP_PID
+criu dump --images-dir /tmp --stream --shell-job --tree $APP_PID
 ```
 
 ### Restore
 
 ```bash
 lz4 -d /tmp/img.lz4 - | criu-image-streamer --images-dir /tmp extract --serve &
-criu restore --images-dir /tmp --remote --shell-job
+criu restore --images-dir /tmp --stream --shell-job
 ```
 
 Example 2: Extracting an image to local storage
@@ -136,7 +136,7 @@ exec 11> >(lz4 - - | aws s3 cp - s3://bucket/img-2.lz4)
 exec 12> >(lz4 - - | aws s3 cp - s3://bucket/img-3.lz4)
 
 criu-image-streamer --images-dir /tmp --shard-fds 10,11,12 capture &
-criu dump --images-dir /tmp --remote --shell-job --tree $APP_PID
+criu dump --images-dir /tmp --stream --shell-job --tree $APP_PID
 ```
 
 ### Restore
@@ -147,7 +147,7 @@ exec 11< <(aws s3 cp s3://bucket/img-2.lz4 - | lz4 -d - -)
 exec 12< <(aws s3 cp s3://bucket/img-3.lz4 - | lz4 -d - -)
 
 criu-image-streamer --shard-fds 10,11,12 --images-dir /tmp extract --serve &
-criu restore --images-dir /tmp --remote --shell-job
+criu restore --images-dir /tmp --stream --shell-job
 ```
 
 Example 4: Incorporating a tarball into the image
@@ -171,7 +171,7 @@ APP_PID=$!
 exec 20< <(tar -C / -vcpSf - /scratch/app)
 
 criu-image-streamer --images-dir /tmp --ext-file-fds fs.tar:20 capture | lz4 -f - /tmp/img.lz4 &
-criu dump --images-dir /tmp --remote --shell-job --tree $APP_PID
+criu dump --images-dir /tmp --stream --shell-job --tree $APP_PID
 ```
 
 ### Restore
@@ -182,7 +182,7 @@ rm -f /scratch/app/data
 exec 20> >(tar -C / -vxf - --no-overwrite-dir)
 
 lz4 -d /tmp/img.lz4 - | criu-image-streamer --images-dir /tmp --ext-file-fds fs.tar:20 extract --serve &
-criu restore --images-dir /tmp --remote --shell-job
+criu restore --images-dir /tmp --stream --shell-job
 
 cat /scratch/app/data
 ```

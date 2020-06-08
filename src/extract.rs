@@ -14,7 +14,6 @@
 
 use std::{
     collections::{BinaryHeap, HashMap},
-    os::unix::net::UnixListener,
     os::unix::io::AsRawFd,
     io::Write,
     time::Instant,
@@ -22,7 +21,7 @@ use std::{
     fs,
 };
 use crate::{
-    handshake::{HandshakeContext, HandshakeResult},
+    criu_connection::CriuListener,
     unix_pipe::{UnixPipe, UnixPipeImpl},
     util::*,
     image,
@@ -296,52 +295,23 @@ fn serve_img(
     mem_store: &mut image_store::mem::Store,
 ) -> Result<()>
 {
-    let server = {
-        let socket_path = &images_dir.join("img-cache.sock");
-        let _ = fs::remove_file(socket_path); // see capture.rs for rationale
-        UnixListener::bind(socket_path)
-            .with_context(|| format!("Failed to bind socket to {}", socket_path.display()))?
-    };
-
+    let listener = CriuListener::bind_for_restore(images_dir)?;
     writeln!(progress_pipe, "socket-init")?;
+    let mut criu = listener.into_accept()?;
 
-    let mut handshake_ctx = HandshakeContext::new();
-    handshake_ctx.add_snapshot_id(images_dir.to_str().expect("image_dir should be UTF8 valid").to_string());
-
-    let mut serve_file = |filename: String, mut socket| -> Result<()> {
+    // XXX Currently, CRIU reads image files sequentially. If it were to read files in an
+    // interleaved fashion, we would have to use the Poller to avoid deadlocks.
+    while let Some(filename) = criu.read_next_file_request()? {
         match mem_store.remove(&filename) {
             Some(memory_file) => {
-                HandshakeContext::send_reply(&mut socket, 0)?;
-
-                let mut pipe = UnixPipe::new(recv_fd(&mut socket)?)?;
+                criu.send_file_reply(true)?; // true means that the file exists.
+                let mut pipe = criu.recv_pipe()?;
                 pipe.set_capacity_no_eperm(CRIU_PIPE_DESIRED_CAPACITY)?;
-
                 memory_file.drain(&mut pipe)?;
             }
             None => {
-                HandshakeContext::send_reply(&mut socket, libc::ENOENT as u32)?;
+                criu.send_file_reply(false)?; // false means that the file does not exist.
             }
-        }
-
-        Ok(())
-    };
-
-    loop {
-        let (mut socket, _) = server.accept()?;
-        match handshake_ctx.handshake(&mut socket)? {
-            HandshakeResult::ReadFile(filename) => {
-                // XXX It seems that CRIU reads image files sequentially. If it was reading files
-                // in an interleaved fashion, we would have to use the Poller to avoid deadlocks.
-                serve_file(filename, socket)?;
-            }
-            HandshakeResult::ImageEOF => {
-                // CRIU informs us that it is done, allowing us to close the server.
-                // We don't unlink the socket file as we could potentially be racing with another
-                // instance of the image streamer.
-                break;
-            }
-            HandshakeResult::SnapshotIdExchanged => {}
-            _ => bail!("unexpected handshake"),
         }
     }
 

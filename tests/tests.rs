@@ -34,7 +34,7 @@ use criu_image_streamer::{
     util::{KB, MB, PAGE_SIZE},
 };
 use crate::helpers::{
-    criu::CRIU,
+    criu::Criu,
     util::*,
 };
 use anyhow::Result;
@@ -43,22 +43,24 @@ use anyhow::Result;
 // workflow common in the TestImpl trait. Each test modifies some of the behavior of TestImpl to
 // test specific part of the workflow.
 
-struct CheckpointContext {
-    snapshot_id: String,
-
+struct StreamerCheckpointContext {
     progress: BufReader<UnixPipe>,
     capture_thread: thread::JoinHandle<()>,
+}
 
-    criu: CRIU,
+struct CheckpointContext {
+    streamer: StreamerCheckpointContext,
+    criu: Criu,
+}
+
+struct StreamerRestoreContext {
+    progress: BufReader<UnixPipe>,
+    extract_thread: thread::JoinHandle<()>,
 }
 
 struct RestoreContext {
-    snapshot_id: String,
-
-    progress: BufReader<UnixPipe>,
-    extract_thread: thread::JoinHandle<()>,
-
-    criu: CRIU,
+    streamer: StreamerRestoreContext,
+    criu: Criu,
 }
 
 trait TestImpl {
@@ -75,9 +77,7 @@ trait TestImpl {
             .collect()
     }
 
-    fn bootstrap(&mut self) -> Result<(CheckpointContext, RestoreContext)> {
-        let images_dir = self.images_dir();
-
+    fn bootstrap(&mut self) -> Result<(StreamerCheckpointContext, StreamerRestoreContext)> {
         let (capture_progress_r, capture_progress_w) = new_pipe();
         let (extract_progress_r, extract_progress_w) = new_pipe();
 
@@ -88,7 +88,7 @@ trait TestImpl {
             self.shards().drain(..).unzip();
 
         let capture_thread = {
-            let images_dir = images_dir.clone();
+            let images_dir = self.images_dir();
             let ext_files = self.capture_ext_files();
 
             thread::spawn(move || {
@@ -98,7 +98,7 @@ trait TestImpl {
         };
 
         let extract_thread = {
-            let images_dir = images_dir.clone();
+            let images_dir = self.images_dir();
             let ext_files = self.extract_ext_files();
             let serve = self.serve_image();
 
@@ -108,36 +108,25 @@ trait TestImpl {
             })
         };
 
-        let criu_checkpoint = CRIU::new(images_dir.join("img-proxy.sock"));
-        let criu_restore = CRIU::new(images_dir.join("img-cache.sock"));
-
-        let snapshot_id = images_dir.to_str().unwrap().to_string();
-
         Ok((
-                CheckpointContext {
-                    snapshot_id: snapshot_id.clone(),
+                StreamerCheckpointContext {
                     progress: capture_progress,
                     capture_thread,
-                    criu: criu_checkpoint
                 },
-                RestoreContext {
-                    snapshot_id: snapshot_id.clone(),
+                StreamerRestoreContext {
                     progress: extract_progress,
                     extract_thread,
-                    criu: criu_restore
                 }
         ))
     }
 
-    fn init_checkpoint(&mut self, checkpoint: &mut CheckpointContext) -> Result<()> {
+    fn criu_checkpoint_connect(&mut self, mut checkpoint: StreamerCheckpointContext)
+        -> Result<CheckpointContext>
+    {
         // Wait for CRIU socket for checkpointing to be ready
         assert_eq!(read_line(&mut checkpoint.progress)?, "socket-init");
-        // Initialize snapshot ids the way CRIU would do it
-        checkpoint.criu.append_snapshot_id(&checkpoint.snapshot_id)?;
-        let snapshot_ids = checkpoint.criu.get_snapshot_ids()?;
-        assert_eq!(snapshot_ids, vec![checkpoint.snapshot_id.as_str()]);
-
-        Ok(())
+        let criu = Criu::connect(self.images_dir().join("streamer-capture.sock"))?;
+        Ok(CheckpointContext { streamer: checkpoint, criu })
     }
 
     fn send_img_files(&mut self, _checkpoint: &mut CheckpointContext) -> Result<()> {
@@ -146,15 +135,15 @@ trait TestImpl {
 
     fn read_progress_checkpoint_started(&mut self, checkpoint: &mut CheckpointContext) -> Result<()> {
         if self.has_checkpoint_started() {
-            assert_eq!(read_line(&mut checkpoint.progress)?, "checkpoint-start");
+            assert_eq!(read_line(&mut checkpoint.streamer.progress)?, "checkpoint-start");
         }
         Ok(())
     }
 
     fn finish_checkpoint(&mut self, mut checkpoint: CheckpointContext) -> Result<Stats> {
         checkpoint.criu.finish()?;
-        let stats: Stats = read_stats(&mut checkpoint.progress)?;
-        checkpoint.capture_thread.join().unwrap();
+        let stats: Stats = read_stats(&mut checkpoint.streamer.progress)?;
+        checkpoint.streamer.capture_thread.join().unwrap();
         Ok(stats)
     }
 
@@ -162,7 +151,7 @@ trait TestImpl {
         Ok(())
     }
 
-    fn finish_image_extraction(&mut self, restore: &mut RestoreContext) -> Result<Stats> {
+    fn finish_image_extraction(&mut self, restore: &mut StreamerRestoreContext) -> Result<Stats> {
         Ok(read_stats(&mut restore.progress)?)
     }
 
@@ -170,12 +159,13 @@ trait TestImpl {
         Ok(())
     }
 
-    fn init_restore(&mut self, restore: &mut RestoreContext) -> Result<()> {
+    fn criu_restore_connect(&mut self, mut restore: StreamerRestoreContext)
+        -> Result<RestoreContext>
+    {
         // The image can be served now. Wait for the CRIU socket to be ready.
         assert_eq!(read_line(&mut restore.progress)?, "socket-init");
-        // Check that the snapshot ids is valid
-        assert_eq!(restore.criu.get_snapshot_ids()?, vec![restore.snapshot_id.as_str()]);
-        Ok(())
+        let criu = Criu::connect(self.images_dir().join("streamer-extract.sock"))?;
+        Ok(RestoreContext { streamer: restore, criu })
     }
 
     fn recv_img_files(&mut self, _restore: &mut RestoreContext) -> Result<()> {
@@ -184,14 +174,14 @@ trait TestImpl {
 
     fn finish_restore(&mut self, restore: RestoreContext) -> Result<()> {
         restore.criu.finish()?;
-        restore.extract_thread.join().unwrap();
+        restore.streamer.extract_thread.join().unwrap();
         Ok(())
     }
 
     fn run(&mut self) -> Result<()> {
-        let (mut checkpoint, mut restore) = self.bootstrap()?;
+        let (checkpoint, mut restore) = self.bootstrap()?;
 
-        self.init_checkpoint(&mut checkpoint)?;
+        let mut checkpoint = self.criu_checkpoint_connect(checkpoint)?;
         self.send_img_files(&mut checkpoint)?;
         self.read_progress_checkpoint_started(&mut checkpoint)?;
         let stats = self.finish_checkpoint(checkpoint)?;
@@ -201,7 +191,7 @@ trait TestImpl {
         self.after_finish_image_extraction(&stats)?;
 
         if self.serve_image() {
-            self.init_restore(&mut restore)?;
+            let mut restore = self.criu_restore_connect(restore)?;
             self.recv_img_files(&mut restore)?;
             self.finish_restore(restore)?;
         }
@@ -221,14 +211,14 @@ mod basic {
 
     impl TestImpl for Test {
         fn send_img_files(&mut self, checkpoint: &mut CheckpointContext) -> Result<()> {
-            checkpoint.criu.write_img_file(&checkpoint.snapshot_id, "file.img")?
+            checkpoint.criu.write_img_file("file.img")?
                 .write_all("hello world".as_bytes())?;
 
             Ok(())
         }
 
         fn recv_img_files(&mut self, restore: &mut RestoreContext) -> Result<()> {
-            let buf = restore.criu.read_img_file_into_vec(&restore.snapshot_id, "file.img")?;
+            let buf = restore.criu.read_img_file_into_vec("file.img")?;
             assert_eq!(buf, "hello world".as_bytes(), "File data content mismatch");
             Ok(())
         }
@@ -253,7 +243,7 @@ mod missing_files {
         fn has_checkpoint_started(&mut self) -> bool { false }
 
         fn recv_img_files(&mut self, restore: &mut RestoreContext) -> Result<()> {
-            let file = restore.criu.maybe_read_img_file(&restore.snapshot_id, "no-file.img")?;
+            let file = restore.criu.maybe_read_img_file("no-file.img")?;
             assert!(file.is_none(), "File exists but shouldn't");
             Ok(())
         }
@@ -413,7 +403,7 @@ mod load_balancing {
                 return Ok(());
             }
 
-            checkpoint.criu.write_img_file(&checkpoint.snapshot_id, "file.img")?
+            checkpoint.criu.write_img_file("file.img")?
                 .write_all(&self.file)?;
 
             Ok(())
@@ -451,7 +441,7 @@ mod load_balancing {
                 return Ok(());
             }
 
-            let buf = restore.criu.read_img_file_into_vec(&restore.snapshot_id, "file.img")?;
+            let buf = restore.criu.read_img_file_into_vec("file.img")?;
             assert!(buf == self.file);
 
             Ok(())
@@ -499,12 +489,12 @@ mod restore_mem_usage {
 
             for i in 0..NUM_SMALL_FILES {
                 let filename = format!("small-{}.img", i);
-                checkpoint.criu.write_img_file(&checkpoint.snapshot_id, &filename)?.write_all(&small)?;
+                checkpoint.criu.write_img_file(&filename)?.write_all(&small)?;
             }
 
             // Writing the big file in small chunks, to prevent blowing up memory with a large
             // vector that may not get freed.
-            let mut big_file_pipe = checkpoint.criu.write_img_file(&checkpoint.snapshot_id, "big.img")?;
+            let mut big_file_pipe = checkpoint.criu.write_img_file("big.img")?;
             let buf = get_filled_vec(1*KB, 1);
             for _ in 0..(BIG_FILE_SIZE/buf.len()) {
                 big_file_pipe.write_all(&buf)?;
@@ -528,7 +518,7 @@ mod restore_mem_usage {
             let start_recv_mem_usage = get_resident_mem_size();
 
             let mut big_file = Vec::with_capacity(BIG_FILE_SIZE);
-            let big_file_pipe = &restore.criu.read_img_file(&restore.snapshot_id, "big.img")?;
+            let big_file_pipe = &restore.criu.read_img_file("big.img")?;
             let mut max_overhead = 0;
             loop {
                 let count = big_file_pipe.take(10*KB as u64).read_to_end(&mut big_file)?;
@@ -558,6 +548,7 @@ mod restore_mem_usage {
 mod stress {
     use super::*;
     use crossbeam_utils::thread;
+    use std::sync::Mutex;
 
     const NUM_THREADS: usize = 5;
     const NUM_SMALL_FILES: usize = 10000;
@@ -588,15 +579,16 @@ mod stress {
 
     impl TestImpl for Test {
         fn send_img_files(&mut self, checkpoint: &mut CheckpointContext) -> Result<()> {
+            let checkpoint = Mutex::new(checkpoint);
+
             let write_img_file = |name: &str, data: &Vec<u8>| -> Result<()> {
-                checkpoint.criu
-                    .write_img_file(&checkpoint.snapshot_id, name)?
-                    .write_all(data)?;
+                let mut pipe = checkpoint.lock().unwrap().criu.write_img_file(name)?;
+                pipe.write_all(data)?;
                 Ok(())
             };
 
             let write_img_file_chunked = |name: &str, data: &Vec<u8>| -> Result<()> {
-                let mut pipe = checkpoint.criu.write_img_file(&checkpoint.snapshot_id, name)?;
+                let mut pipe = checkpoint.lock().unwrap().criu.write_img_file(name)?;
 
                 let mut offset = 0;
                 while offset < data.len() {
@@ -636,8 +628,8 @@ mod stress {
         }
 
         fn recv_img_files(&mut self, restore: &mut RestoreContext) -> Result<()> {
-            let read_img_file = |name: &str| -> Result<Vec<u8>> {
-                restore.criu.read_img_file_into_vec(&restore.snapshot_id, name)
+            let mut read_img_file = |name: &str| -> Result<Vec<u8>> {
+                restore.criu.read_img_file_into_vec(name)
             };
 
             for i in 0..NUM_THREADS+1 {
@@ -671,6 +663,7 @@ mod splice_bug {
     // Maybe the fix is https://github.com/torvalds/linux/commit/1bdc347
     // We should be careful not to use such buggy kernel.
     use super::*;
+    use std::sync::Mutex;
 
     const NUM_MEDIUM_CHUNKED_FILES: usize = 100;
     const MEDIUM_FILE_SIZE: usize = 10*KB;
@@ -689,8 +682,10 @@ mod splice_bug {
 
     impl TestImpl for Test {
         fn send_img_files(&mut self, checkpoint: &mut CheckpointContext) -> Result<()> {
+            let checkpoint = Mutex::new(checkpoint);
+
             let write_img_file_chunked = |name: &str, data: &Vec<u8>| -> Result<()> {
-                let mut pipe = checkpoint.criu.write_img_file(&checkpoint.snapshot_id, name)?;
+                let mut pipe = checkpoint.lock().unwrap().criu.write_img_file(name)?;
 
                 let mut offset = 0;
                 while offset < data.len() {
@@ -714,8 +709,8 @@ mod splice_bug {
         }
 
         fn recv_img_files(&mut self, restore: &mut RestoreContext) -> Result<()> {
-            let read_img_file = |name: &str| -> Result<Vec<u8>> {
-                restore.criu.read_img_file_into_vec(&restore.snapshot_id, name)
+            let mut read_img_file = |name: &str| -> Result<Vec<u8>> {
+                restore.criu.read_img_file_into_vec(name)
             };
 
             let i = 0;
@@ -754,9 +749,9 @@ mod extract_to_disk {
         fn serve_image(&mut self) -> bool { false }
 
         fn send_img_files(&mut self, checkpoint: &mut CheckpointContext) -> Result<()> {
-            checkpoint.criu.write_img_file(&checkpoint.snapshot_id, "small.img")?
+            checkpoint.criu.write_img_file("small.img")?
                 .write_all(&self.small_file)?;
-            checkpoint.criu.write_img_file(&checkpoint.snapshot_id, "medium.img")?
+            checkpoint.criu.write_img_file("medium.img")?
                 .write_all(&self.medium_file)?;
             Ok(())
         }

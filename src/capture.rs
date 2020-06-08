@@ -14,7 +14,6 @@
 
 use std::{
     collections::{BinaryHeap},
-    os::unix::net::UnixListener,
     os::unix::io::AsRawFd,
     io::Write,
     time::Instant,
@@ -26,7 +25,7 @@ use std::{
 };
 use crate::{
     poller::{Poller, EpollFlags},
-    handshake::{HandshakeContext, HandshakeResult},
+    criu_connection::{CriuListener, CriuConnection},
     unix_pipe::{UnixPipe, UnixPipeImpl},
     util::*,
     image,
@@ -35,8 +34,10 @@ use crate::{
 };
 use anyhow::{Result, Context};
 
-// CRIU's image is comprised of many files. When CRIU wishes to send us a file, it connects to our
-// UNIX socket, performs a handshake, and sends the content of the file via a pipe. We stream the
+// When CRIU dumps an application, it first connects to our UNIX socket. CRIU will send us many
+// image files during the dumping process. To send an image file, it sends a protobuf request that
+// contains the filename. Immediately after this message, it sends a file descriptor of a pipe
+// which we can use to receive the content of the corresponding file. We stream the
 // content of these image files to an array of outputs, called shards. The shards are typically
 // a compression and upload stage (e.g., `lz4 | aws s3 cp - s3://destination`). The number of
 // shards is typically 4, and less than 32. Image file sizes can vary widely (1KB to +10GB) and are
@@ -271,18 +272,9 @@ pub fn capture(
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
     // we are ready. We do this ASAP because our controller is blocking on us to start CRIU.
-    let server = {
-        fs::create_dir_all(images_dir)
-            .with_context(|| format!("Failed to create directory {}", images_dir.display()))?;
-
-        let socket_path = &images_dir.join("img-proxy.sock");
-        // 1) We unlink the socket path to avoid EADDRINUSE on bind() if it already exists.
-        // 2) We ignore the unlink error because we are most likely getting a -ENOENT.
-        //    It is safe to do so as correctness is not impacted by unlink() failing.
-        let _ = fs::remove_file(socket_path);
-        UnixListener::bind(socket_path)
-            .with_context(|| format!("Failed to bind socket to {}", socket_path.display()))?
-    };
+    fs::create_dir_all(images_dir)
+        .with_context(|| format!("Failed to create directory {}", images_dir.display()))?;
+    let listener = CriuListener::bind_for_capture(images_dir)?;
     writeln!(&mut progress_pipe, "socket-init")?;
 
     // The kernel may limit the number of allocated pages for pipes, we must do it before setting
@@ -290,13 +282,16 @@ pub fn capture(
     let shard_pipe_capacity = UnixPipe::set_best_capacity(&mut shard_pipes, SHARD_PIPE_DESIRED_CAPACITY)?;
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect::<Result<_>>()?;
 
+    // We are ready to get to work. Accept CRIU's connection.
+    let criu = listener.into_accept()?;
+
     // Setup the poller to monitor the server socket and image files' pipes
     enum PollType {
-        Server(UnixListener),
+        CRIU(CriuConnection),
         ImageFile(ImageFile),
     };
     let mut poller = Poller::new()?;
-    poller.add(server.as_raw_fd(), PollType::Server(server), EpollFlags::EPOLLIN)?;
+    poller.add(criu.as_raw_fd(), PollType::CRIU(criu), EpollFlags::EPOLLIN)?;
 
     for (filename, pipe) in ext_file_pipes {
         let img_file = ImageFile::new(filename, pipe)?;
@@ -304,28 +299,23 @@ pub fn capture(
     }
 
     // Used to compute transfer speed. But the real start is when we call
-    // notify_checkpoint_start_once
+    // `notify_checkpoint_start_once()`
     let mut start_time = Instant::now();
-
-    // The handshake context provides logic around CRIU protocol.
-    // The image serializer is the one reading data from the image files,
-    // and writing them in chunks into the shards.
-    let mut handshake_ctx = HandshakeContext::new();
-    let mut img_serializer = ImageSerializer::new(&mut shards, shard_pipe_capacity);
     let notify_checkpoint_start_once = Once::new();
 
-    // Process all inputs until they are all closed.
-    // When we have activity on the server socket, we accept a new connection, do the handshake.
-    // If the handshake result in a image file that we should receive, we add it to the poller.
-    // We use an epoll_capacity of 8. Doesn't really matter as the number of concurrent connection
-    // is typically at most 2.
+    // The image serializer reads data from the image files, and writes it in chunks into shards.
+    let mut img_serializer = ImageSerializer::new(&mut shards, shard_pipe_capacity);
+
+    // Process all inputs (ext files, CRIU's connection, and CRIU's files) until they reach EOF.
+    // As CRIU requests to write files, we receive new unix pipes that are added to the poller.
+    // We use an epoll_capacity of 8. This doesn't really matter as the number of concurrent
+    // connection is typically at most 2.
     let epoll_capacity = 8;
     while let Some((poll_key, poll_obj)) = poller.poll(epoll_capacity)? {
         match poll_obj {
-            PollType::Server(server) => {
-                let (mut socket, _) = server.accept()?;
-                match handshake_ctx.handshake(&mut socket)? {
-                    HandshakeResult::WriteFile(filename) => {
+            PollType::CRIU(criu) => {
+                match criu.read_next_file_request()? {
+                    Some(filename) => {
                         if filename != "cpuinfo.img" {
                             // Once the checkpoint has started, we must notify the controller.
                             // This is useful for our controller to kick tarring the file system as
@@ -340,28 +330,22 @@ pub fn capture(
                             });
                         }
 
-                        let pipe = UnixPipe::new(recv_fd(&mut socket)?)?;
+                        let pipe = criu.recv_pipe()?;
                         let img_file = ImageFile::new(filename, pipe)?;
                         poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
                                    EpollFlags::EPOLLIN)?;
                     }
-                    HandshakeResult::ImageEOF => {
-                        // CRIU is telling us that we are done, so we close the server.
-                        // We are not unlinking the socket path as we could potentially
-                        // be racing with another instance of the image streamer.
+                    None => {
+                        // We are done receiving file requests. We can close the socket.
+                        // However, other files may still be transfering data.
                         poller.remove(poll_key)?;
-                    }
-                    HandshakeResult::SnapshotIdExchanged => {}
-                    HandshakeResult::ReadFile(_) => {
-                        bail!("CRIU is attempting to read the image. \
-                              We don't support incremental checkpoints");
                     }
                 }
             }
             PollType::ImageFile(img_file) => {
                 if !img_serializer.drain_img_file(img_file)? {
-                    // EOF if reached. Note that the image file pipe file descriptor is closed
-                    // automatically as it is owned by the poller.
+                    // EOF of the image file is reached. Note that the image file pipe file
+                    // descriptor is closed automatically as it is owned by the poller.
                     poller.remove(poll_key)?;
                 }
             }
