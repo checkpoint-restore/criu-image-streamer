@@ -1,3 +1,5 @@
+[![master](https://travis-ci.org/checkpoint-restore/criu-image-streamer.svg?branch=master)](https://travis-ci.org/checkpoint-restore/criu-image-streamer)
+
 CRIU Image Streamer
 ====================
 
@@ -271,7 +273,7 @@ Limitations
 may be used as a pipe adapter.
 * Using an older Linux kernel can lead to memory corruption.
 We tested version 4.14.67 from the stable tree, and have seen memory corruption.
-We tested version 4.14.121 and seen no issues.
+We tested version 4.14.121 and seen no issues. 4.15.0-1037 is problematic.
 It appears that this [kernel bug fix](https://github.com/torvalds/linux/commit/1bdc347)
 is the remedy. Run `cargo test splice` to test if criu-image-streamer is
 affected by the bug on your platform.
