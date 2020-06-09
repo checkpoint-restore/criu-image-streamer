@@ -261,8 +261,8 @@ the content in the pipes are pointing directly to the application memory.
 Tests
 -----
 
-We provide an extensive integration test suite located in `tests/`. You may run
-it with `cargo test -- --test-threads=1`, or `make test`.
+We provide a test suite located in `tests/`. You may run it with `cargo test --
+--test-threads=1`, or `make test`.
 
 Limitations
 -----------
