@@ -26,7 +26,7 @@ use crate::{
 use anyhow::{Result, Context};
 
 const IMG_STREAMER_CAPTURE_SOCKET_NAME: &str = "streamer-capture.sock";
-const IMG_STREAMER_EXTRACT_SOCKET_NAME: &str = "streamer-extract.sock";
+const IMG_STREAMER_SERVE_SOCKET_NAME: &str = "streamer-serve.sock";
 
 /// The role of the `CriuListener` and `CriuConnection` is to handle communication with CRIU over
 /// the image socket.
@@ -52,7 +52,7 @@ impl CriuListener {
     }
 
     pub fn bind_for_restore(images_dir: &Path) -> Result<Self> {
-        Self::bind(&images_dir.join(IMG_STREAMER_EXTRACT_SOCKET_NAME))
+        Self::bind(&images_dir.join(IMG_STREAMER_SERVE_SOCKET_NAME))
     }
 
     // into_accept() drops the listener. There is no need for having multiple CRIU connections,

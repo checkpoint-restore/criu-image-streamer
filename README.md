@@ -68,19 +68,21 @@ OPTIONS:
 
 SUBCOMMANDS:
     capture    Capture a CRIU image
-    extract    Extract a captured CRIU image
-
-extract OPTIONS:
-    --serve                                 Buffer the image in memory and serve to CRIU
+    serve      Serve a captured CRIU image to CRIU
+    extract    Extract a captured CRIU image to the specified images_dir
 ```
 
-`--images-dir` is used during operations to create a UNIX socket where CRIU can
-connect to. That socket is used to exchange pipes for data transfers. The
-directory is not used for storing data when streaming images to and from CRIU.
+During the `capture` or `serve` operations, a UNIX socket is created into the
+specified `images-dir` where CRIU can connect to and perform a checkpoint, or
+restore operation, respectively. That socket is then used to exchange pipes for
+data transfers. The images directory is not used for storing data when
+streaming images to and from CRIU. Rather, shards passed via `shard-fds`, are
+used to store and retrieve the image data.
 
-There are two modes of operation: capture and extract. Capture is used for
-checkpointing and extract for restoring images. We show how these operations
-are used with examples.
+The image data flow of each operation is the following:
+* Capture: CRIU → criu-image-streamer → shards
+* Serve: shards → criu-image-streamer → CRIU
+* Extract: shards → criu-image-streamer → images-dir
 
 Example 1: On-the-fly compression to local storage
 --------------------------------------------------
@@ -101,7 +103,7 @@ criu dump --images-dir /tmp --stream --shell-job --tree $APP_PID
 ### Restore
 
 ```bash
-lz4 -d /tmp/img.lz4 - | criu-image-streamer --images-dir /tmp extract --serve &
+lz4 -d /tmp/img.lz4 - | criu-image-streamer --images-dir /tmp serve &
 criu restore --images-dir /tmp --stream --shell-job
 ```
 
@@ -109,8 +111,8 @@ Example 2: Extracting an image to local storage
 -----------------------------------------------
 
 Extracting a previously captured image to disk can be useful for inspection.
-Using the `extract` command without `--serve` extract the image to disk instead
-of waiting for CRIU to consume it from memory.
+Using the `extract` command extracts the image to disk instead of waiting for
+CRIU to consume it from memory.
 
 ```bash
 lz4 -d /tmp/img.lz4 - | criu-image-streamer --images-dir output_dir extract
@@ -146,7 +148,7 @@ exec 10< <(aws s3 cp s3://bucket/img-1.lz4 - | lz4 -d - -)
 exec 11< <(aws s3 cp s3://bucket/img-2.lz4 - | lz4 -d - -)
 exec 12< <(aws s3 cp s3://bucket/img-3.lz4 - | lz4 -d - -)
 
-criu-image-streamer --shard-fds 10,11,12 --images-dir /tmp extract --serve &
+criu-image-streamer --shard-fds 10,11,12 --images-dir /tmp serve &
 criu restore --images-dir /tmp --stream --shell-job
 ```
 
@@ -181,7 +183,7 @@ rm -f /scratch/app/data
 
 exec 20> >(tar -C / -vxf - --no-overwrite-dir)
 
-lz4 -d /tmp/img.lz4 - | criu-image-streamer --images-dir /tmp --ext-file-fds fs.tar:20 extract --serve &
+lz4 -d /tmp/img.lz4 - | criu-image-streamer --images-dir /tmp --ext-file-fds fs.tar:20 serve &
 criu restore --images-dir /tmp --stream --shell-job
 
 cat /scratch/app/data
@@ -264,11 +266,14 @@ Tests
 We provide a test suite located in `tests/`. You may run it with `cargo test --
 --test-threads=1`, or `make test`.
 
+To run integration tests, run the CRIU test suite with `--stream`. For example,
+run: `sudo ./test/zdtm.py run -f h -a --stream` in the CRIU project directory.
+
 Limitations
 -----------
 
 * Incremental checkpoints are not supported.
-* Most CLI options must be passed _before_ the capture/extract subcommand.
+* CLI options must be passed _before_ the capture/serve/extract subcommand.
 * Shards must be UNIX pipes. For regular files support, `cat` or `pv` (faster)
 may be used as a pipe adapter.
 * Using an older Linux kernel can lead to memory corruption.
