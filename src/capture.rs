@@ -15,7 +15,6 @@
 use std::{
     collections::{BinaryHeap},
     os::unix::io::AsRawFd,
-    io::Write,
     time::Instant,
     cmp::{min, max},
     path::Path,
@@ -275,7 +274,8 @@ pub fn capture(
     fs::create_dir_all(images_dir)
         .with_context(|| format!("Failed to create directory {}", images_dir.display()))?;
     let listener = CriuListener::bind_for_capture(images_dir)?;
-    writeln!(&mut progress_pipe, "socket-init")?;
+
+    emit_progress(&mut progress_pipe, "socket-init");
 
     // The kernel may limit the number of allocated pages for pipes, we must do it before setting
     // the pipe size of external file pipes as shard pipes are more performance sensitive.
@@ -323,10 +323,8 @@ pub fn capture(
                             // We skip cpuinfo.img because it doesn't tell us if the application
                             // has been stopped.
                             notify_checkpoint_start_once.call_once(|| {
-                                // TODO remove this unwrap(). Currently, we can't return a Result
-                                // from a call_once().
-                                writeln!(&mut progress_pipe, "checkpoint-start").unwrap();
                                 start_time = Instant::now();
+                                emit_progress(&mut progress_pipe, "checkpoint-start");
                             });
                         }
 
@@ -363,7 +361,7 @@ pub fn capture(
             }).collect(),
         }
     };
-    writeln!(&mut progress_pipe, "{}", serde_json::to_string(&stats)?)?;
+    emit_progress(&mut progress_pipe, &serde_json::to_string(&stats)?);
 
     Ok(())
 }
