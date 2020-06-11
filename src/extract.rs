@@ -30,7 +30,7 @@ use crate::{
     image_store::{ImageStore, ImageFile},
 };
 use nix::poll::{poll, PollFd, PollFlags};
-use anyhow::{Result, Context};
+use anyhow::Result;
 
 // The serialized image is received via multiple data streams (`Shard`). The data streams are
 // comprised of markers followed by an optional data payload. The format of the markers is
@@ -352,26 +352,33 @@ fn drain_shards_into_img_store<Store: ImageStore>(
 }
 
 /// Description of the arguments can be found in main.rs
+pub fn serve(images_dir: &Path,
+    mut progress_pipe: fs::File,
+    shard_pipes: Vec<UnixPipe>,
+    ext_file_pipes: Vec<(String, UnixPipe)>,
+) -> Result<()>
+{
+    create_dir_all(images_dir)?;
+
+    let mut mem_store = image_store::mem::Store::new();
+    drain_shards_into_img_store(&mut mem_store, &mut progress_pipe, shard_pipes, ext_file_pipes)?;
+    serve_img(images_dir, &mut progress_pipe, &mut mem_store)?;
+
+    Ok(())
+}
+
+/// Description of the arguments can be found in main.rs
 pub fn extract(images_dir: &Path,
     mut progress_pipe: fs::File,
     shard_pipes: Vec<UnixPipe>,
     ext_file_pipes: Vec<(String, UnixPipe)>,
-    serve: bool,
 ) -> Result<()>
 {
-    fs::create_dir_all(images_dir)
-        .with_context(|| format!("Failed to create directory {}", images_dir.display()))?;
+    create_dir_all(images_dir)?;
 
-    if serve {
-        // extract in memory, and serve to CRIU
-        let mut mem_store = image_store::mem::Store::new();
-        drain_shards_into_img_store(&mut mem_store, &mut progress_pipe, shard_pipes, ext_file_pipes)?;
-        serve_img(images_dir, &mut progress_pipe, &mut mem_store)?;
-    } else {
-        // extract on disk
-        let mut file_store = image_store::fs::Store::new(images_dir);
-        drain_shards_into_img_store(&mut file_store, &mut progress_pipe, shard_pipes, ext_file_pipes)?;
-    }
+    // extract on disk
+    let mut file_store = image_store::fs::Store::new(images_dir);
+    drain_shards_into_img_store(&mut file_store, &mut progress_pipe, shard_pipes, ext_file_pipes)?;
 
     Ok(())
 }

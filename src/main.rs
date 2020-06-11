@@ -30,7 +30,7 @@ use structopt::{StructOpt, clap::AppSettings};
 use criu_image_streamer::{
     unix_pipe::{UnixPipe, UnixPipeImpl},
     capture::capture,
-    extract::extract,
+    extract::{serve, extract},
 };
 use nix::unistd::dup;
 use anyhow::{Result, Context};
@@ -90,15 +90,16 @@ enum Operation {
     /// Capture a CRIU image
     Capture,
 
-    /// Extract a captured CRIU image
-    Extract {
-        /// Buffer the image in memory and serve to CRIU
-        #[structopt(long)]
-        serve: bool,
-    }
+    /// Serve a captured CRIU image to CRIU
+    Serve,
+
+    /// Extract a captured CRIU image to the specified images_dir
+    Extract,
 }
 
 fn main() -> Result<()> {
+    use Operation::*;
+
     let opts: Opts = Opts::from_args();
 
     let progress_pipe = {
@@ -114,8 +115,8 @@ fn main() -> Result<()> {
             opts.shard_fds
         } else {
             match opts.operation {
-                Operation::Capture => vec![dup(libc::STDOUT_FILENO)?],
-                Operation::Extract{..} => vec![dup(libc::STDIN_FILENO)?],
+                Capture => vec![dup(libc::STDOUT_FILENO)?],
+                Extract | Serve => vec![dup(libc::STDIN_FILENO)?],
             }
         }.into_iter()
             .map(UnixPipe::new)
@@ -128,10 +129,9 @@ fn main() -> Result<()> {
             .collect::<Result<_>>()?;
 
     match opts.operation {
-        Operation::Capture =>
-            capture(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes),
-        Operation::Extract { serve } =>
-            extract(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes, serve),
+        Capture => capture(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes),
+        Extract => extract(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes),
+        Serve   =>   serve(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes),
     }
 }
 
@@ -160,19 +160,19 @@ mod cli_tests {
                 shard_fds: vec![],
                 ext_file_fds: vec![],
                 progress_fd: None,
-                operation: Operation::Extract { serve: false },
+                operation: Operation::Extract,
             })
     }
 
     #[test]
     fn test_extract_serve() {
-        assert_eq!(Opts::from_iter(&vec!["prog", "-D", "imgdir", "extract", "--serve"]),
+        assert_eq!(Opts::from_iter(&vec!["prog", "-D", "imgdir", "serve"]),
             Opts {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
                 ext_file_fds: vec![],
                 progress_fd: None,
-                operation: Operation::Extract { serve: true },
+                operation: Operation::Serve,
             })
     }
 

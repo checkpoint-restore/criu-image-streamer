@@ -30,7 +30,7 @@ use std::{
 use criu_image_streamer::{
     unix_pipe::{UnixPipe, UnixPipeImpl},
     capture::capture,
-    extract::extract,
+    extract::{extract, serve},
     util::{KB, MB, PAGE_SIZE},
 };
 use crate::helpers::{
@@ -100,11 +100,16 @@ trait TestImpl {
         let extract_thread = {
             let images_dir = self.images_dir();
             let ext_files = self.extract_ext_files();
-            let serve = self.serve_image();
+            let serve_image = self.serve_image();
 
             thread::spawn(move || {
-                extract(&images_dir, extract_progress_w, shard_pipes_r, ext_files, serve)
-                    .expect("extract() failed");
+                if serve_image {
+                    serve(&images_dir, extract_progress_w, shard_pipes_r, ext_files)
+                        .expect("serve() failed");
+                } else {
+                    extract(&images_dir, extract_progress_w, shard_pipes_r, ext_files)
+                        .expect("extract() failed");
+                }
             })
         };
 
@@ -164,7 +169,7 @@ trait TestImpl {
     {
         // The image can be served now. Wait for the CRIU socket to be ready.
         assert_eq!(read_line(&mut restore.progress)?, "socket-init");
-        let criu = Criu::connect(self.images_dir().join("streamer-extract.sock"))?;
+        let criu = Criu::connect(self.images_dir().join("streamer-serve.sock"))?;
         Ok(RestoreContext { streamer: restore, criu })
     }
 

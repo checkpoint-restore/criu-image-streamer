@@ -18,6 +18,7 @@ use std::{
     os::unix::net::UnixStream,
     os::unix::io::{RawFd, AsRawFd},
     io::{Read, Write},
+    path::Path,
     fs,
 };
 use nix::{
@@ -107,6 +108,11 @@ pub fn emit_progress(progress_pipe: &mut fs::File, msg: &str) {
     // Writes to the progress pipe can fail. The parent may have closed that pipe, and we don't
     // need to get upset about failing reporting progress.
     let _ = writeln!(progress_pipe, "{}", msg);
+}
+
+pub fn create_dir_all(dir: &Path) -> Result<()> {
+    fs::create_dir_all(dir)
+        .with_context(|| format!("Failed to create directory {}", dir.display()))
 }
 
 #[derive(Serialize)]

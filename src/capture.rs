@@ -31,7 +31,7 @@ use crate::{
     image::marker,
     impl_ord_by,
 };
-use anyhow::{Result, Context};
+use anyhow::Result;
 
 // When CRIU dumps an application, it first connects to our UNIX socket. CRIU will send us many
 // image files during the dumping process. To send an image file, it sends a protobuf request that
@@ -271,8 +271,7 @@ pub fn capture(
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
     // we are ready. We do this ASAP because our controller is blocking on us to start CRIU.
-    fs::create_dir_all(images_dir)
-        .with_context(|| format!("Failed to create directory {}", images_dir.display()))?;
+    create_dir_all(images_dir)?;
     let listener = CriuListener::bind_for_capture(images_dir)?;
 
     emit_progress(&mut progress_pipe, "socket-init");
