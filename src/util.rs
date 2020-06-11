@@ -18,6 +18,7 @@ use std::{
     os::unix::net::UnixStream,
     os::unix::io::{RawFd, AsRawFd},
     io::{Read, Write},
+    fs,
 };
 use nix::{
     sys::socket::{ControlMessageOwned, MsgFlags, recvmsg},
@@ -100,6 +101,12 @@ pub fn recv_fd(socket: &mut UnixStream) -> Result<RawFd> {
         Some(ControlMessageOwned::ScmRights(fds)) if fds.len() == 1 => fds[0],
         _ => bail!("No fd received"),
     })
+}
+
+pub fn emit_progress(progress_pipe: &mut fs::File, msg: &str) {
+    // Writes to the progress pipe can fail. The parent may have closed that pipe, and we don't
+    // need to get upset about failing reporting progress.
+    let _ = writeln!(progress_pipe, "{}", msg);
 }
 
 #[derive(Serialize)]

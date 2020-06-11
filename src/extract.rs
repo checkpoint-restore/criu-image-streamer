@@ -15,7 +15,6 @@
 use std::{
     collections::{BinaryHeap, HashMap},
     os::unix::io::AsRawFd,
-    io::Write,
     time::Instant,
     path::Path,
     fs,
@@ -296,7 +295,7 @@ fn serve_img(
 ) -> Result<()>
 {
     let listener = CriuListener::bind_for_restore(images_dir)?;
-    writeln!(progress_pipe, "socket-init")?;
+    emit_progress(progress_pipe, "socket-init");
     let mut criu = listener.into_accept()?;
 
     // XXX Currently, CRIU reads image files sequentially. If it were to read files in an
@@ -347,7 +346,7 @@ fn drain_shards_into_img_store<Store: ImageStore>(
             transfer_duration_millis: s.transfer_duration_millis,
         }).collect(),
     };
-    writeln!(progress_pipe, "{}", serde_json::to_string(&stats)?)?;
+    emit_progress(progress_pipe, &serde_json::to_string(&stats)?);
 
     Ok(())
 }
