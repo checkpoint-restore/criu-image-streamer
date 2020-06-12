@@ -18,8 +18,7 @@ all: criu-image-streamer
 PREFIX ?= $(DESTDIR)/usr/local
 BINDIR ?= $(PREFIX)/bin
 
-#BUILD=dev
-BUILD=release
+BUILD ?= release
 
 BUILD_FLAGS=
 
