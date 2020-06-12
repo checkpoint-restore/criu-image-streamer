@@ -15,8 +15,7 @@
 
 all: criu-image-streamer
 
-#BUILD=dev
-BUILD=release
+BUILD ?= release
 
 BUILD_FLAGS=
 
