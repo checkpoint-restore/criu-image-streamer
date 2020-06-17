@@ -15,6 +15,9 @@
 
 all: criu-image-streamer
 
+PREFIX := $(DESTDIR)/usr/local
+BINDIR := $(PREFIX)/bin
+
 #BUILD=dev
 BUILD=release
 
@@ -37,8 +40,16 @@ target/$(BUILD)/criu-image-streamer: $(DEPS)
 criu-image-streamer: target/$(BUILD)/criu-image-streamer
 	cp -a $< $@
 
+install:
+	install -m0755 target/$(BUILD)/criu-image-streamer $(BINDIR)/criu-image-streamer
+
+uninstall:
+	$(RM) $(addprefix $(BINDIR)/,criu-image-streamer)
+
 test:
 	$(CARGO) test $(BUILD_FLAGS) -- --test-threads=1 --nocapture
 
 clean:
 	rm -rf target criu-image-streamer
+
+.PHONY: all clean install test uninstall
