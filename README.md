@@ -49,6 +49,9 @@ of bugs often encountered when using other low-level languages.
 Usage
 -----
 
+**Note**: At the moment, CRIU from the `criu-dev` branch is needed. Not
+`master`. You may need to compile CRIU from source.
+
 The CLI interface of criu-image-streamer is the following:
 
 ```
@@ -288,6 +291,9 @@ Acknowledgments
 * Author: Nicolas Viennot [@nviennot](https://github.com/nviennot)
 * Reviewer: Vitaly Davidovich [@vitalyd](https://github.com/vitalyd)
 * Reviewer: Peter Burka [@pburka](https://github.com/pburka)
+* Reviewer: Radostin Stoyanov [@rst0git](https://github.com/rst0git)
+* Reviewer: Andrei Vagin [@avagin](https://github.com/avagin)
+* Reviewer: Mike Rapoport [@rppt](https://github.com/rppt)
 * Developed as a [Two Sigma Open Source](https://opensource.twosigma.com) initiative
 
 License
