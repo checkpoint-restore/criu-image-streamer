@@ -14,7 +14,6 @@
 
 use std::{
     os::unix::io::{RawFd, FromRawFd, AsRawFd},
-    sync::Once,
     fs,
 };
 use nix::{
@@ -143,10 +142,16 @@ impl UnixPipeImpl for UnixPipe {
 }
 
 fn warn_once_capacity_eperm() {
+    // TODO warn only if there's a debug flag turned on. It's a bit annoying to have this message
+    // all the time. In most cases, the pipe size won't be a performance bottleneck.
+
+    /*
+    use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         eprintln!("Cannot set pipe size as desired (EPERM). \
                    Continuing with smaller pipe sizes but performance may be reduced. \
                    See the Deploy section in the criu-image-streamer README for a remedy.");
     });
+    */
 }
