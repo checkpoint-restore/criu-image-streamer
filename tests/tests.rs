@@ -337,12 +337,12 @@ mod load_balancing {
     use super::*;
 
     // This test simulates a capture with 4 shards, where the first one is being rate limited
-    // at 1MB/s. We attempt to capture a 40MB image. The choke shard should receieve little
+    // at 1MB/s. We attempt to capture a 40MB image. The choke shard should receive little
     // data compared to the other shards.
     //
     // NOTE Load balancing works only when using pipes of capacity greater than 2*PAGE_SIZE.
     // We skip that test if we don't have enough pipe capacity.
-    // The Rust test runner lacks the ability to skip a stest at runtime, so we improvised a bit.
+    // The Rust test runner lacks the ability to skip a test at runtime, so we improvised a bit.
 
     const CHOKE_RATE_PER_MILLI: usize = 1*KB; // 1MB/sec
     const CHOKE_SHARD_INDEX: usize = 0;
@@ -466,7 +466,7 @@ mod restore_mem_usage {
     // There are two things to test:
     // 1) The in-memory store should have low overhead. 200 bytes per file is not exactly good, but
     //    it's good enough (measured at 129 bytes). I welcome suggestion to make this better.
-    // 2) The in-memory store should free its memory as its tranfering a file to CRIU
+    // 2) The in-memory store should free its memory as its transferring a file to CRIU
     //    It shouldn't be bigger than image_store::mem::MAX_LARGE_CHUNK_SIZE (10MB). We add a bit
     //    for slack.
 
