@@ -54,7 +54,7 @@ use anyhow::Result;
 // the same order as they were produced. It might be difficult to preserve this guarantee forever,
 // so it would be wise to keep our in-memory buffering implementation anyways.
 
-/// We are not doing zero-copy tranfers to CRIU (yet), we have to be mindful of CPU caches.
+/// We are not doing zero-copy transfers to CRIU (yet), we have to be mindful of CPU caches.
 /// If we were doing shard to CRIU splices, we could bump the capacity to 4MB.
 const CRIU_PIPE_DESIRED_CAPACITY: i32 = 1*MB as i32;
 
@@ -277,7 +277,7 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
         Ok(self.readable_shards.pop())
     }
 
-    /// Returns succesfully when the image has been fully deserialized. This is our main loop.
+    /// Returns successfully when the image has been fully deserialized. This is our main loop.
     pub fn drain_all(&mut self) -> Result<()> {
         while let Some(shard) = self.get_next_readable_shard()? {
             self.drain_shard(shard)?;
@@ -326,7 +326,7 @@ fn drain_shards_into_img_store<Store: ImageStore>(
 {
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect::<Result<_>>()?;
 
-    // The content of the `ext_file_pipes` are streamed out directly, and not bufferd in memory.
+    // The content of the `ext_file_pipes` are streamed out directly, and not buffered in memory.
     // This is important to avoid blowing up our memory budget. These external files typically
     // contain a checkpointed filesystem, which is large.
     let mut overlayed_img_store = image_store::fs_overlay::Store::new(img_store);

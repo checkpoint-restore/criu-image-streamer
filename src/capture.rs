@@ -334,7 +334,7 @@ pub fn capture(
                     }
                     None => {
                         // We are done receiving file requests. We can close the socket.
-                        // However, other files may still be transfering data.
+                        // However, other files may still be transferring data.
                         poller.remove(poll_key)?;
                     }
                 }

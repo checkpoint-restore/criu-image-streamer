@@ -96,7 +96,7 @@ pub mod mem {
     ///
     /// This is beneficial for avoiding blowing up our memory budget: CRIU copies data from the
     /// image pipe. As CRIU copies data from our memory space, we need to release the memory that
-    /// we are holding. The default memory allocator is unpredicable when it comes to using brk(),
+    /// we are holding. The default memory allocator is unpredictable when it comes to using brk(),
     /// or mmap(), risking an Out-Of-Memory situation. Which is why we use our `MmapBuf`
     /// implementation.
     ///
