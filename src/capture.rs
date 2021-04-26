@@ -288,7 +288,7 @@ pub fn capture(
     enum PollType {
         CRIU(CriuConnection),
         ImageFile(ImageFile),
-    };
+    }
     let mut poller = Poller::new()?;
     poller.add(criu.as_raw_fd(), PollType::CRIU(criu), EpollFlags::EPOLLIN)?;
 
