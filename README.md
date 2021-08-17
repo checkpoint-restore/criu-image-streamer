@@ -68,7 +68,10 @@ OPTIONS:
                                             Multiple external files may be passed as a comma separated list.
     -p, --progress-fd <progress-fd>         File descriptor where to report progress. Defaults to 2.
 
-
+    --tcp-listen-remap <ports>...           When serving the image, remap on the fly the TCP listen socket
+                                            ports. Format is old_port:new_port. May only be used with the
+                                            serve operation. Multiple tcp port remaps may be passed as a comma
+                                            separated list.
 SUBCOMMANDS:
     capture    Capture a CRIU image
     serve      Serve a captured CRIU image to CRIU

@@ -356,6 +356,7 @@ pub fn serve(images_dir: &Path,
     mut progress_pipe: fs::File,
     shard_pipes: Vec<UnixPipe>,
     ext_file_pipes: Vec<(String, UnixPipe)>,
+    tcp_listen_remaps: Vec<(u16, u16)>,
 ) -> Result<()>
 {
     create_dir_all(images_dir)?;
