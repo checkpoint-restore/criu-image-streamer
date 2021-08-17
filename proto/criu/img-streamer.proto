@@ -1,11 +1,14 @@
-// Taken from CRIU codebase: criu/images/img-streamer.proto
+// SPDX-License-Identifier: MIT
+
+
+// File imported by sync_criu_proto_files.sh
 
 syntax = "proto2";
 package criu;
 
 // This message is sent from CRIU to the streamer.
-// * During dump, it is used to communicate the name of the file that is about to
-//   be sent to the streamer.
+// * During dump, it communicates the name of the file that is about to be sent
+//   to the streamer.
 // * During restore, CRIU requests image files from the streamer. The message is
 //   used to communicate the name of the desired file.
 message img_streamer_request_entry {
@@ -13,7 +16,7 @@ message img_streamer_request_entry {
 }
 
 // This message is sent from the streamer to CRIU. It is only used during
-// restore operations to communicates whether the requested file exists.
+// restore to report whether the requested file exists.
 message img_streamer_reply_entry {
 	required bool exists = 1;
 }

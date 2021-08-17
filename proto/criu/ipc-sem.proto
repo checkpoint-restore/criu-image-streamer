@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: MIT
+
+
+// File imported by sync_criu_proto_files.sh
+
+syntax = "proto2";
+package criu;
+
+import "ipc-desc.proto";
+
+message ipc_sem_entry {
+	required ipc_desc_entry	desc	= 1;
+	required uint32		nsems	= 2;
+}

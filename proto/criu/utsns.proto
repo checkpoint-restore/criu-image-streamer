@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: MIT
+
+
+// File imported by sync_criu_proto_files.sh
+
+syntax = "proto2";
+package criu;
+
+message utsns_entry {
+	required string nodename	= 1;
+	required string domainname	= 2;
+}

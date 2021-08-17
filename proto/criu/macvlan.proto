@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: MIT
+
+
+// File imported by sync_criu_proto_files.sh
+
+syntax = "proto2";
+package criu;
+
+message macvlan_link_entry {
+	required uint32	mode	= 1;
+	optional uint32 flags	= 2;
+}

@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: MIT
+
+
+// File imported by sync_criu_proto_files.sh
+
+syntax = "proto2";
+package criu;
+
+message seccomp_filter {
+	required bytes		filter			= 1;
+	optional uint32		prev			= 2;
+	optional uint32		flags			= 3;
+}
+
+message seccomp_entry {
+	repeated seccomp_filter		seccomp_filters	= 1;
+}

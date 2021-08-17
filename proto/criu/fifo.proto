@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: MIT
+
+
+// File imported by sync_criu_proto_files.sh
+
+syntax = "proto2";
+package criu;
+
+message fifo_entry {
+	required uint32		id		= 1;
+	required uint32		pipe_id		= 2;
+	optional uint32		regf_id		= 3;
+}
