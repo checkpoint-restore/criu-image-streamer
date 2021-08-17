@@ -37,13 +37,25 @@ use anyhow::{Result, Context};
 
 fn parse_ext_fd(s: &str) -> Result<(String, i32)> {
     let mut parts = s.split(':');
-    Ok(match (parts.next(), parts.next()) {
-        (Some(filename), Some(fd)) => {
+    Ok(match (parts.next(), parts.next(), parts.next()) {
+        (Some(filename), Some(fd), None) => {
             let filename = filename.to_string();
             let fd = fd.parse().context("Provided ext fd is not an integer")?;
             (filename, fd)
         },
         _ => bail!("Format is filename:fd")
+    })
+}
+
+fn parse_port_remap(s: &str) -> Result<(u16, u16)> {
+    let mut parts = s.split(':');
+    Ok(match (parts.next(), parts.next(), parts.next()) {
+        (Some(old_port), Some(new_port), None) => {
+            let old_port = old_port.parse().context("Provided old_port is not a u16 integer")?;
+            let new_port = new_port.parse().context("Provided new_port is not a u16 integer")?;
+            (old_port, new_port)
+        },
+        _ => bail!("Format is old_port:new_port")
     })
 }
 
@@ -80,6 +92,12 @@ struct Opts {
     // The default being 2 is a bit of a lie. We dup(STDOUT_FILENO) due to ownership issues.
     #[structopt(short, long)]
     progress_fd: Option<i32>,
+
+    /// When serving the image, remap on the fly the TCP listen socket ports.
+    /// Format is old_port:new_port. May only be used with the serve operation.
+    /// Multiple tcp port remaps may be passed as a comma separated list.
+    #[structopt(long, parse(try_from_str=parse_port_remap), require_delimiter = true)]
+    tcp_listen_remap: Vec<(u16, u16)>,
 
     #[structopt(subcommand)]
     operation: Operation,
@@ -128,10 +146,13 @@ fn main() -> Result<()> {
             .map(|(filename, fd)| Ok((filename, UnixPipe::new(fd)?)))
             .collect::<Result<_>>()?;
 
+    ensure!(opts.operation == Serve || opts.tcp_listen_remap.is_empty(),
+            "--tcp-listen-remap is only supported when serving the image");
+
     match opts.operation {
         Capture => capture(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes),
         Extract => extract(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes),
-        Serve   =>   serve(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes),
+        Serve   =>   serve(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes, opts.tcp_listen_remap),
     }
 }
 
@@ -147,6 +168,7 @@ mod cli_tests {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
                 ext_file_fds: vec![],
+                tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Capture,
             })
@@ -159,6 +181,7 @@ mod cli_tests {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
                 ext_file_fds: vec![],
+                tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Extract,
             })
@@ -171,6 +194,7 @@ mod cli_tests {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
                 ext_file_fds: vec![],
+                tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Serve,
             })
@@ -184,6 +208,7 @@ mod cli_tests {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![1,2,3],
                 ext_file_fds: vec![],
+                tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Capture,
             })
@@ -196,8 +221,22 @@ mod cli_tests {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
                 ext_file_fds: vec![(String::from("file1"), 1), (String::from("file2"), 2)],
+                tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Capture,
+            })
+    }
+
+    #[test]
+    fn test_tcp_listen_remaps() {
+        assert_eq!(Opts::from_iter(&vec!["prog", "--images-dir", "imgdir", "--tcp-listen-remap", "2000:3000,5000:6000", "serve"]),
+            Opts {
+                images_dir: PathBuf::from("imgdir"),
+                shard_fds: vec![],
+                ext_file_fds: vec![],
+                tcp_listen_remap: vec![(2000,3000),(5000,6000)],
+                progress_fd: None,
+                operation: Operation::Serve,
             })
     }
 
@@ -208,6 +247,7 @@ mod cli_tests {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
                 ext_file_fds: vec![],
+                tcp_listen_remap: vec![],
                 progress_fd: Some(3),
                 operation: Operation::Capture,
             })

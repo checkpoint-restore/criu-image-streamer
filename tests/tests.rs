@@ -104,7 +104,7 @@ trait TestImpl {
 
             thread::spawn(move || {
                 if serve_image {
-                    serve(&images_dir, extract_progress_w, shard_pipes_r, ext_files)
+                    serve(&images_dir, extract_progress_w, shard_pipes_r, ext_files, vec![])
                         .expect("serve() failed");
                 } else {
                     extract(&images_dir, extract_progress_w, shard_pipes_r, ext_files)
