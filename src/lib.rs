@@ -28,6 +28,7 @@ pub mod poller;
 pub mod unix_pipe;
 pub mod criu_connection;
 pub mod ord_by;
+pub mod image_patcher;
 pub mod image_store;
 pub mod mmap_buf;
 

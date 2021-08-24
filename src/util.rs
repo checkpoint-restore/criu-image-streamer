@@ -44,7 +44,7 @@ lazy_static::lazy_static! {
 /// If we are at EOF, it returns Ok(None).
 /// If it can read the number of bytes requested, it returns Ok(bytes_requested).
 /// Otherwise, it returns Err("EOF error").
-fn read_bytes_next<S: Read>(src: &mut S, len: usize) -> Result<Option<BytesMut>> {
+pub fn read_bytes_next<S: Read>(src: &mut S, len: usize) -> Result<Option<BytesMut>> {
     let mut buf = Vec::with_capacity(len);
     src.take(len as u64).read_to_end(&mut buf).context("Failed to read protobuf")?;
     Ok(match buf.len() {

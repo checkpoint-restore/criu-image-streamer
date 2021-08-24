@@ -116,13 +116,13 @@ impl File {
         }
     }
 
-    fn write_from_pipe(&mut self, shard_pipe: &mut UnixPipe, size: usize) -> Result<usize> {
+    pub fn copy_from_reader(&mut self, reader: &mut impl Read, size: usize) -> Result<usize> {
         // reserve_chunk() upgrades a small file to a large file if needed.
         self.reserve_chunk(size);
 
         Ok(match self {
             Small(chunk) => {
-                shard_pipe.take(size as u64).read_to_end(chunk)
+                reader.take(size as u64).read_to_end(chunk)
                     .context("Failed to read from shard")?;
                 size
             }
@@ -135,7 +135,7 @@ impl File {
                 let to_read = min(size, remaining_chunk_len);
 
                 chunk.resize(current_offset + to_read);
-                shard_pipe.read_exact(&mut chunk[current_offset..])
+                reader.read_exact(&mut chunk[current_offset..])
                     .context("Failed to read from shard")?;
                 to_read
             }
@@ -158,15 +158,55 @@ impl File {
 
         Ok(())
     }
+
+    pub fn reader(&self) -> FileReader {
+        let chunks = match self {
+            Small(chunk) => vec![&chunk[..]].into_iter().collect(),
+            Large(chunks) => chunks.iter().map(|chunk| &chunk[..]).collect(),
+        };
+        FileReader { chunks }
+    }
 }
 
 impl ImageFile for File {
     fn write_all_from_pipe(&mut self, shard_pipe: &mut UnixPipe, mut size: usize) -> Result<()> {
         while size > 0 {
-            let written = self.write_from_pipe(shard_pipe, size)?;
+            let written = self.copy_from_reader(shard_pipe, size)?;
             size -= written;
         }
 
+        Ok(())
+    }
+}
+
+pub struct FileReader<'a> {
+    chunks: VecDeque<&'a [u8]>,
+}
+
+impl<'a> Read for FileReader<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
+        if let Some(chunk) = self.chunks.front_mut() {
+            let result = chunk.read(buf);
+            if chunk.is_empty() {
+                self.chunks.pop_front();
+            }
+            result
+        } else {
+            Ok(0)
+        }
+    }
+}
+
+impl Write for File {
+    fn write(&mut self, mut buf: &[u8]) -> IoResult<usize> {
+        let len = buf.len();
+        // unwrap() is safe: the provided reader is a slice, so we are
+        // guaranteed no read errors. We are writing to an in-memory buffer, so
+        // we don't have write errors.
+        Ok(self.copy_from_reader(&mut buf, len).unwrap())
+    }
+
+    fn flush(&mut self) -> IoResult<()> {
         Ok(())
     }
 }
