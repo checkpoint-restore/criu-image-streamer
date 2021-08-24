@@ -28,6 +28,7 @@ use crate::{
     impl_ord_by,
     image_store,
     image_store::{ImageStore, ImageFile},
+    image_patcher::patch_img,
 };
 use nix::poll::{poll, PollFd, PollFlags};
 use anyhow::Result;
@@ -363,6 +364,7 @@ pub fn serve(images_dir: &Path,
 
     let mut mem_store = image_store::mem::Store::new();
     drain_shards_into_img_store(&mut mem_store, &mut progress_pipe, shard_pipes, ext_file_pipes)?;
+    patch_img(&mut mem_store, tcp_listen_remaps)?;
     serve_img(images_dir, &mut progress_pipe, &mut mem_store)?;
 
     Ok(())
