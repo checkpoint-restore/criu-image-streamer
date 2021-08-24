@@ -163,7 +163,7 @@ pub mod mem {
             match self {
                 Small(chunk) => {
                     if chunk.len() + size_hint > **MAX_SMALL_CHUNK_SIZE {
-                        *self = Self::large_from_slice(&chunk);
+                        *self = Self::large_from_slice(chunk);
                     } else {
                         chunk.reserve_exact(size_hint);
                     }

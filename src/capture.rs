@@ -220,7 +220,7 @@ impl<'a> ImageSerializer<'a> {
         match &self.current_filename {
             Some(current_filename) if current_filename == filename => {},
             _ => {
-                self.current_filename = Some(Rc::clone(&filename));
+                self.current_filename = Some(Rc::clone(filename));
                 let marker = self.gen_marker(marker::Body::Filename(filename.to_string()));
                 self.write_chunk(Chunk { marker, data: None })?;
             }
