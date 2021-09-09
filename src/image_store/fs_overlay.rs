@@ -48,10 +48,10 @@ impl<UnderlyingStore: ImageStore> ImageStore for Store<'_, UnderlyingStore> {
         })
     }
 
-    fn close(&mut self, filename: Box<str>, output: Self::File) {
+    fn insert(&mut self, filename: impl Into<Box<str>>, output: Self::File) {
         match output {
             File::Overlayed(_) => {},
-            File::Underlying(file) => self.underlying_store.close(filename, file),
+            File::Underlying(file) => self.underlying_store.insert(filename, file),
         }
     }
 }

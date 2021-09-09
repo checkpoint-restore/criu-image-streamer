@@ -36,8 +36,11 @@ use crate::unix_pipe::UnixPipe;
 
 pub trait ImageStore {
     type File: ImageFile;
+    /// `create()` returns a `File`, which can be written to.
     fn create(&mut self, filename: &str) -> Result<Self::File>;
-    fn close(&mut self, _filename: Box<str>, _file: Self::File) {}
+    /// `insert()` takes ownership of a previously created file, and insert it
+    /// in the image store.
+    fn insert(&mut self, filename: impl Into<Box<str>>, file: Self::File);
 }
 
 pub trait ImageFile {

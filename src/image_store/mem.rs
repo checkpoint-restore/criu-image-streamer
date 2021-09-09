@@ -44,15 +44,12 @@ use crate::{
 const MAX_LARGE_CHUNK_SIZE: usize = 10*MB;
 static MAX_SMALL_CHUNK_SIZE: &PAGE_SIZE = &PAGE_SIZE;
 
+#[derive(Default)]
 pub struct Store {
     files: HashMap<Box<str>, File>,
 }
 
 impl Store {
-    pub fn new() -> Self {
-        Self { files: HashMap::new() }
-    }
-
     pub fn remove(&mut self, filename: &str) -> Option<File> {
         self.files.remove(filename)
     }
@@ -65,9 +62,12 @@ impl ImageStore for Store {
         Ok(File::new_small())
     }
 
-    fn close(&mut self, filename: Box<str>, file: File) {
+    fn insert(&mut self, filename: impl Into<Box<str>>, file: File) {
+        let filename = filename.into();
+        assert!(!self.files.contains_key(&filename), "Image file {} is being overwritten", filename);
+
         // We don't need to shrink our file. If it's a small one, then it's already small
-        // enough (we used reserve_exact()). For a large file, We could mremap() the last
+        // enough (we used reserve_exact()). For a large file, we could mremap() the last
         // chunk, but that doesn't really help as we don't touch pages from the unused
         // capacity, which thus remains unallocated.
         self.files.insert(filename, file);
@@ -87,6 +87,11 @@ impl File {
     }
 
     fn large_from_slice(init_data: &[u8]) -> Self {
+        // This function is always used to convert a small file into a large
+        // file. There's no panic as `init_data` is a most PAGE_SIZE=4KB, which
+        // fits into the mmap buffer (size 10MB).
+        assert!(init_data.len() <= MAX_LARGE_CHUNK_SIZE);
+
         let mut chunk = MmapBuf::with_capacity(MAX_LARGE_CHUNK_SIZE);
         chunk.resize(init_data.len());
         chunk.copy_from_slice(init_data);

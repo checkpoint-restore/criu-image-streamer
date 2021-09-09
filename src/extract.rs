@@ -180,7 +180,7 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
             Some(FileEof(true)) => {
                 let (filename, img_file) = self.current_img_file.take()
                     .ok_or_else(|| anyhow!("Unexpected FileEof marker"))?;
-                self.img_store.close(filename, img_file);
+                self.img_store.insert(filename, img_file);
             }
             Some(ImageEof(true)) => {
                 self.mark_image_eof()?;
@@ -362,7 +362,7 @@ pub fn serve(images_dir: &Path,
 {
     create_dir_all(images_dir)?;
 
-    let mut mem_store = image_store::mem::Store::new();
+    let mut mem_store = image_store::mem::Store::default();
     drain_shards_into_img_store(&mut mem_store, &mut progress_pipe, shard_pipes, ext_file_pipes)?;
     patch_img(&mut mem_store, tcp_listen_remaps)?;
     serve_img(images_dir, &mut progress_pipe, &mut mem_store)?;

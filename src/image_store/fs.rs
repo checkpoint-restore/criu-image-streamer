@@ -43,6 +43,10 @@ impl ImageStore for Store<'_> {
 
         Ok(file)
     }
+
+    fn insert(&mut self, _filename: impl Into<Box<str>>, _file: Self::File) {
+        // Nothing to do, the file is on disk already.
+    }
 }
 
 impl ImageFile for fs::File {

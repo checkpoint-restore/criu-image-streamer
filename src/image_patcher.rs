@@ -13,7 +13,7 @@
 //  limitations under the License.
 
 use anyhow::{Context, Result};
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::Buf;
 
 use std::{
     collections::HashMap,
@@ -31,7 +31,7 @@ use crate::{
 const IMG_COMMON_MAGIC: u32 = 0x54564319;
 const FILES_MAGIC: u32 = 0x56303138;
 
-// from #include <netinet/tcp.h>
+// From #include <netinet/tcp.h>
 const TCP_LISTEN: u32 = 10;
 
 fn read_criu_img_header(reader: &mut impl Read, expected_header_magic: u32) -> Result<()>
@@ -51,10 +51,8 @@ fn read_criu_img_header(reader: &mut impl Read, expected_header_magic: u32) -> R
 
 fn write_criu_img_header(writer: &mut impl Write, header_magic: u32) -> Result<()>
 {
-    let mut buf = BytesMut::with_capacity(2*size_of::<u32>());
-    buf.put_u32_le(IMG_COMMON_MAGIC);
-    buf.put_u32_le(header_magic);
-    writer.write_all(&mut buf)?;
+    writer.write_all(&IMG_COMMON_MAGIC.to_le_bytes())?;
+    writer.write_all(&header_magic.to_le_bytes())?;
     Ok(())
 }
 
@@ -69,19 +67,20 @@ fn patch_tcp_listen_remaps(
 
     let mut tcp_listen_remaps: HashMap<u16, u16> = tcp_listen_remaps.into_iter().collect();
 
+    // remove() corresponds to HashMap::remove() in the memory store.
     let old_files = img_store.remove("files.img")
         .ok_or_else(|| anyhow!("files.img is missing from the image"))?;
     let mut old_files = old_files.reader();
     read_criu_img_header(&mut old_files, FILES_MAGIC)?;
 
-    let mut new_files = img_store.create("files.img.tmp")?;
+    let mut new_files = img_store.create("files.img")?;
     write_criu_img_header(&mut new_files, FILES_MAGIC)?;
 
     // We take the original "files.img" file (`old_files`), we apply a few
     // transformations, and produce a new "files.img" file (`new_files`).
     // The file is a stream of protobuf items of type `criu::FileEntry`.
-    // The following loop decode each one of them in the `old_files`, modify
-    // the data structure if desired, and encode it into `new_files`.
+    // The following loop decodes each one of them in the `old_files`, modifies
+    // the data structure if desired, and encodes it into `new_files`.
     //
     // It's a bit unfortunate that we decode and encode all entries in files.img
     // as all we do is patch a value within a few entries, but keep in mind that
@@ -114,7 +113,7 @@ fn patch_tcp_listen_remaps(
               old_tcp_listen_ports, remap_ports_not_found);
     }
 
-    img_store.close("files.img".into(), new_files);
+    img_store.insert("files.img", new_files);
 
     Ok(())
 }
