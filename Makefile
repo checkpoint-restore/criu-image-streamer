@@ -26,7 +26,7 @@ ifeq ($(BUILD),release)
 	BUILD_FLAGS+=--release
 endif
 
-DEPS = $(wildcard src/*.rs) Cargo.toml
+DEPS = $(wildcard src/*.rs src/**/*.rs) Cargo.toml
 
 CARGO=$(HOME)/.cargo/bin/cargo
 ifeq (,$(wildcard $(CARGO)))
