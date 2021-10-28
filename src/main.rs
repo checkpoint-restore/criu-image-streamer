@@ -115,7 +115,7 @@ enum Operation {
     Extract,
 }
 
-fn main() -> Result<()> {
+fn do_main() -> Result<()> {
     use Operation::*;
 
     let opts: Opts = Opts::from_args();
@@ -153,6 +153,12 @@ fn main() -> Result<()> {
         Capture => capture(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes),
         Extract => extract(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes),
         Serve   =>   serve(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes, opts.tcp_listen_remap),
+    }
+}
+
+fn main() {
+    if let Err(e) = do_main() {
+        eprintln!("criu-image-streamer Error: {}", e);
     }
 }
 

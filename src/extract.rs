@@ -13,7 +13,7 @@
 //  limitations under the License.
 
 use std::{
-    collections::{BinaryHeap, HashMap},
+    collections::{BinaryHeap, HashMap, HashSet},
     os::unix::io::AsRawFd,
     time::Instant,
     path::Path,
@@ -299,17 +299,27 @@ fn serve_img(
     emit_progress(progress_pipe, "socket-init");
     let mut criu = listener.into_accept()?;
 
+    let mut filenames_of_sent_files = HashSet::new();
+
     // XXX Currently, CRIU reads image files sequentially. If it were to read files in an
     // interleaved fashion, we would have to use the Poller to avoid deadlocks.
     while let Some(filename) = criu.read_next_file_request()? {
         match mem_store.remove(&filename) {
             Some(memory_file) => {
+                filenames_of_sent_files.insert(filename);
                 criu.send_file_reply(true)?; // true means that the file exists.
                 let mut pipe = criu.recv_pipe()?;
                 pipe.set_capacity_no_eperm(CRIU_PIPE_DESIRED_CAPACITY)?;
                 memory_file.drain(&mut pipe)?;
             }
             None => {
+                // If we keep the image file in our process, CRIU will also
+                // have a copy of the image file. This uses x2 the memory for an image
+                // file. For large files like memory pages, we could very much go over
+                // the machine memory capacity.
+                ensure!(!filenames_of_sent_files.contains(&filename),
+                    "CRIU is requesting the image file `{}` multiple times. \
+                    This is not allowed to keep the memory usage low", &filename);
                 criu.send_file_reply(false)?; // false means that the file does not exist.
             }
         }
