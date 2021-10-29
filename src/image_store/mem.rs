@@ -63,11 +63,14 @@ impl ImageStore for Store {
     }
 
     fn insert(&mut self, filename: impl Into<Box<str>>, file: File) {
+        let filename = filename.into();
+        assert!(!self.files.contains_key(&filename), "Image file {} is being overwritten", filename);
+
         // We don't need to shrink our file. If it's a small one, then it's already small
         // enough (we used reserve_exact()). For a large file, we could mremap() the last
         // chunk, but that doesn't really help as we don't touch pages from the unused
         // capacity, which thus remains unallocated.
-        self.files.insert(filename.into(), file);
+        self.files.insert(filename, file);
     }
 }
 
