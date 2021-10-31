@@ -33,5 +33,11 @@ pub mod image_store;
 pub mod mmap_buf;
 
 // Protobufs definitions are defined in ../proto/
-pub mod criu { include!(concat!(env!("OUT_DIR"), "/criu.rs")); }
-pub mod image { include!(concat!(env!("OUT_DIR"), "/image.rs")); }
+#[allow(clippy::all)]
+pub mod criu {
+    include!(concat!(env!("OUT_DIR"), "/criu.rs"));
+}
+#[allow(clippy::all)]
+pub mod image {
+    include!(concat!(env!("OUT_DIR"), "/image.rs"));
+}
