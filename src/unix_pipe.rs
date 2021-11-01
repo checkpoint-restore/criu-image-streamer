@@ -42,8 +42,7 @@ pub trait UnixPipeImpl: Sized {
     fn new(fd: RawFd) -> Result<Self>;
     fn fionread(&self) -> Result<i32>;
     fn set_capacity(&mut self, capacity: i32) -> nix::Result<()>;
-    fn set_capacity_no_eperm(&mut self, capacity: i32) -> Result<()>;
-    fn set_best_capacity(pipes: &mut [Self], max_capacity: i32) -> Result<i32>;
+    fn increase_capacity(pipes: &mut [Self], max_capacity: i32) -> Result<i32>;
     fn splice_all(&mut self, dst: &mut fs::File, len: usize) -> Result<()>;
     fn vmsplice_all(&mut self, data: &[u8]) -> Result<()>;
 }
@@ -76,33 +75,20 @@ impl UnixPipeImpl for UnixPipe {
         fcntl(self.as_raw_fd(), FcntlArg::F_SETPIPE_SZ(capacity)).map(|_| ())
     }
 
-    // Same as set_capacity(), except EPERM errors are ignored.
-    fn set_capacity_no_eperm(&mut self, capacity: i32) -> Result<()> {
-        match self.set_capacity(capacity) {
-            Err(Error::Sys(Errno::EPERM)) => {
-                warn_once_capacity_eperm();
-                Ok(())
-            }
-            other => other,
-        }?;
-        Ok(())
-    }
-
     /// Sets the capacity of many pipes. /proc/sys/fs/pipe-user-pages-{hard,soft} may be non-zero,
     /// preventing setting the desired capacity. If we can't set the provided `max_capacity`, then
     /// we try with a lower capacity. Eventually we will succeed.
     /// Returns the actual capacity of the pipes.
-    fn set_best_capacity(pipes: &mut [Self], max_capacity: i32) -> Result<i32> {
+    fn increase_capacity(pipes: &mut [Self], max_capacity: i32) -> Result<i32> {
         let mut capacity = max_capacity;
         loop {
             match pipes.iter_mut().try_for_each(|pipe| pipe.set_capacity(capacity)) {
                 Err(Error::Sys(Errno::EPERM)) => {
-                    warn_once_capacity_eperm();
                     assert!(capacity > *PAGE_SIZE as i32);
                     capacity /= 2;
                     continue;
                 }
-                Err(e) => return Err(anyhow!(e)),
+                Err(e) => return Err(anyhow!(e).context("Failed to increase pipes capacities")),
                 Ok(()) => return Ok(capacity),
             };
         }
@@ -139,19 +125,4 @@ impl UnixPipeImpl for UnixPipe {
 
         Ok(())
     }
-}
-
-fn warn_once_capacity_eperm() {
-    // TODO warn only if there's a debug flag turned on. It's a bit annoying to have this message
-    // all the time. In most cases, the pipe size won't be a performance bottleneck.
-
-    /*
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        eprintln!("Cannot set pipe size as desired (EPERM). \
-                   Continuing with smaller pipe sizes but performance may be reduced. \
-                   See the Deploy section in the criu-image-streamer README for a remedy.");
-    });
-    */
 }

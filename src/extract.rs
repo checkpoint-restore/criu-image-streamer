@@ -72,9 +72,10 @@ struct Shard {
 }
 
 impl Shard {
-    fn new(mut pipe: UnixPipe) -> Result<Self> {
-        pipe.set_capacity_no_eperm(SHARD_PIPE_DESIRED_CAPACITY)?;
-        Ok(Self { pipe, bytes_read: 0, transfer_duration_millis: 0 })
+    fn new(mut pipe: UnixPipe) -> Self {
+        // Try setting the pipe capacity. Failing is okay, it's just for better performance.
+        let _ = pipe.set_capacity(SHARD_PIPE_DESIRED_CAPACITY);
+        Self { pipe, bytes_read: 0, transfer_duration_millis: 0 }
     }
 }
 
@@ -310,7 +311,8 @@ fn serve_img(
                 filenames_of_sent_files.insert(filename);
                 criu.send_file_reply(true)?; // true means that the file exists.
                 let mut pipe = criu.recv_pipe()?;
-                pipe.set_capacity_no_eperm(CRIU_PIPE_DESIRED_CAPACITY)?;
+                // Try setting the pipe capacity. Failing is okay.
+                let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
                 memory_file.drain(&mut pipe)?;
             }
             None => {
@@ -336,7 +338,7 @@ fn drain_shards_into_img_store<Store: ImageStore>(
     ext_file_pipes: Vec<(String, UnixPipe)>,
 ) -> Result<()>
 {
-    let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect::<Result<_>>()?;
+    let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect();
 
     // The content of the `ext_file_pipes` are streamed out directly, and not buffered in memory.
     // This is important to avoid blowing up our memory budget. These external files typically
@@ -344,8 +346,9 @@ fn drain_shards_into_img_store<Store: ImageStore>(
     let mut overlayed_img_store = image_store::fs_overlay::Store::new(img_store);
     for (filename, mut pipe) in ext_file_pipes {
         // Despite the misleading name, the pipe is not for CRIU, it's most likely for `tar`, but
-        // it gets to enjoy the same pipe capacity.
-        pipe.set_capacity_no_eperm(CRIU_PIPE_DESIRED_CAPACITY)?;
+        // it gets to enjoy the same pipe capacity. If we fail to increase the pipe capacity,
+        // it's okay. This is just for better performance.
+        let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
         overlayed_img_store.add_overlay(filename, pipe);
     }
 

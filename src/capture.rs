@@ -78,10 +78,11 @@ struct ImageFile {
 }
 
 impl ImageFile {
-    pub fn new(filename: String, mut pipe: UnixPipe) -> Result<Self> {
-        pipe.set_capacity_no_eperm(CRIU_PIPE_DESIRED_CAPACITY)?;
+    pub fn new(filename: String, mut pipe: UnixPipe) -> Self {
+        // Try setting the pipe capacity. Failing is okay, it's just for better performance.
+        let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
         let filename = Rc::from(filename);
-        Ok(Self { pipe, filename })
+        Self { pipe, filename }
     }
 }
 
@@ -279,7 +280,7 @@ pub fn capture(
 
     // The kernel may limit the number of allocated pages for pipes, we must do it before setting
     // the pipe size of external file pipes as shard pipes are more performance sensitive.
-    let shard_pipe_capacity = UnixPipe::set_best_capacity(&mut shard_pipes, SHARD_PIPE_DESIRED_CAPACITY)?;
+    let shard_pipe_capacity = UnixPipe::increase_capacity(&mut shard_pipes, SHARD_PIPE_DESIRED_CAPACITY)?;
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect::<Result<_>>()?;
 
     // We are ready to get to work. Accept CRIU's connection.
@@ -294,7 +295,7 @@ pub fn capture(
     poller.add(criu.as_raw_fd(), PollType::Criu(criu), EpollFlags::EPOLLIN)?;
 
     for (filename, pipe) in ext_file_pipes {
-        let img_file = ImageFile::new(filename, pipe)?;
+        let img_file = ImageFile::new(filename, pipe);
         poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file), EpollFlags::EPOLLIN)?;
     }
 
@@ -329,7 +330,7 @@ pub fn capture(
                         }
 
                         let pipe = criu.recv_pipe()?;
-                        let img_file = ImageFile::new(filename, pipe)?;
+                        let img_file = ImageFile::new(filename, pipe);
                         poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
                                    EpollFlags::EPOLLIN)?;
                     }
