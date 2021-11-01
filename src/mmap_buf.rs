@@ -32,6 +32,7 @@ pub struct MmapBuf {
     capacity: usize,
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl MmapBuf {
     pub fn with_capacity(capacity: usize) -> Self {
         unsafe {

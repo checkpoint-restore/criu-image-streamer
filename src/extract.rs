@@ -57,6 +57,7 @@ use anyhow::Result;
 
 /// We are not doing zero-copy transfers to CRIU (yet), we have to be mindful of CPU caches.
 /// If we were doing shard to CRIU splices, we could bump the capacity to 4MB.
+#[allow(clippy::identity_op)]
 const CRIU_PIPE_DESIRED_CAPACITY: i32 = 1*MB as i32;
 
 /// Data comes in a stream of chunks, which can be as large as 256KB (from capture.rs).

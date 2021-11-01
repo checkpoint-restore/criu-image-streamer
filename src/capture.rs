@@ -65,6 +65,7 @@ const CRIU_PIPE_DESIRED_CAPACITY: i32 = 4*MB as i32;
 
 /// Large buffers size improves performance as it allows us to increase the size of our chunks.
 /// 1MB provides excellent performance.
+#[allow(clippy::identity_op)]
 const SHARD_PIPE_DESIRED_CAPACITY: i32 = 1*MB as i32;
 
 /// An `ImageFile` represents a file coming from CRIU.
@@ -286,11 +287,11 @@ pub fn capture(
 
     // Setup the poller to monitor the server socket and image files' pipes
     enum PollType {
-        CRIU(CriuConnection),
+        Criu(CriuConnection),
         ImageFile(ImageFile),
     }
     let mut poller = Poller::new()?;
-    poller.add(criu.as_raw_fd(), PollType::CRIU(criu), EpollFlags::EPOLLIN)?;
+    poller.add(criu.as_raw_fd(), PollType::Criu(criu), EpollFlags::EPOLLIN)?;
 
     for (filename, pipe) in ext_file_pipes {
         let img_file = ImageFile::new(filename, pipe)?;
@@ -312,7 +313,7 @@ pub fn capture(
     let epoll_capacity = 8;
     while let Some((poll_key, poll_obj)) = poller.poll(epoll_capacity)? {
         match poll_obj {
-            PollType::CRIU(criu) => {
+            PollType::Criu(criu) => {
                 match criu.read_next_file_request()? {
                     Some(filename) => {
                         if filename != "cpuinfo.img" {
