@@ -1,4 +1,4 @@
-[![master](https://travis-ci.org/checkpoint-restore/criu-image-streamer.svg?branch=master)](https://travis-ci.org/checkpoint-restore/criu-image-streamer)
+[![Tests](https://github.com/checkpoint-restore/criu-image-streamer/actions/workflows/tests.yml/badge.svg)](https://github.com/checkpoint-restore/criu-image-streamer/actions/workflows/tests.yml)
 
 CRIU Image Streamer
 ====================

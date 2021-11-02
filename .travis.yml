@@ -1,9 +1,0 @@
-os: linux
-# The default x86 kernel is old and buggy (see splice bug in README).
-# When we use the arm architecture, we get a newer kernel.
-arch: arm64
-dist: bionic
-language: rust
-script:
-  - make
-  - make test
