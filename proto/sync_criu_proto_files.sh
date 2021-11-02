@@ -1,7 +1,10 @@
 #!/bin/bash
 set -eux
 
-sed --version > /dev/null # This commeand fails on BSD, and we don't want the BSD version of sed
+SCRIPT_DIR=$(dirname -- "$(readlink -f -- "$0")")
+cd "$SCRIPT_DIR"
+
+sed --version > /dev/null # This command fails on BSD, and we don't want the BSD version of sed
 
 if [ $# != 1 ]; then
   echo "Usage: $0 /path/to/criu/project"
