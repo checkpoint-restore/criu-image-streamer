@@ -31,7 +31,7 @@ use crate::{
     image_patcher::patch_img,
 };
 use nix::poll::{poll, PollFd, PollFlags};
-use anyhow::Result;
+use anyhow::{Result, Context};
 
 // The serialized image is received via multiple data streams (`Shard`). The data streams are
 // comprised of markers followed by an optional data payload. The format of the markers is
@@ -308,12 +308,13 @@ fn serve_img(
     while let Some(filename) = criu.read_next_file_request()? {
         match mem_store.remove(&filename) {
             Some(memory_file) => {
-                filenames_of_sent_files.insert(filename);
+                filenames_of_sent_files.insert(filename.clone());
                 criu.send_file_reply(true)?; // true means that the file exists.
                 let mut pipe = criu.recv_pipe()?;
                 // Try setting the pipe capacity. Failing is okay.
                 let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
-                memory_file.drain(&mut pipe)?;
+                memory_file.drain(&mut pipe)
+                    .with_context(|| format!("while serving file {}", &filename))?;
             }
             None => {
                 // If we keep the image file in our process, CRIU will also
