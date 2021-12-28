@@ -158,7 +158,7 @@ fn do_main() -> Result<()> {
 
 fn main() {
     if let Err(e) = do_main() {
-        eprintln!("criu-image-streamer Error: {}", e);
+        eprintln!("criu-image-streamer Error: {:#}", e);
     }
 }
 
