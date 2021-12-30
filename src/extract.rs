@@ -20,7 +20,7 @@ use std::{
     fs,
 };
 use crate::{
-    criu_connection::CriuListener,
+    criu_connection::{CriuListener, CriuConnection},
     unix_pipe::{UnixPipe, UnixPipeImpl},
     util::*,
     image,
@@ -29,8 +29,12 @@ use crate::{
     image_store,
     image_store::{ImageStore, ImageFile},
     image_patcher::patch_img,
+    poller::Poller,
 };
-use nix::poll::{poll, PollFd, PollFlags};
+use nix::{
+    poll::{poll, PollFd, PollFlags},
+    sys::epoll::EpollFlags,
+};
 use anyhow::{Result, Context};
 
 // The serialized image is received via multiple data streams (`Shard`). The data streams are
@@ -203,8 +207,8 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
     }
 
     fn process_pending_markers(&mut self) -> Result<()> {
-        while let Some(PendingMarker { marker, mut shard }) = self.get_next_in_order_marker() {
-            self.process_marker(marker, &mut shard)?;
+        while let Some(PendingMarker { marker, shard }) = self.get_next_in_order_marker() {
+            self.process_marker(marker, shard)?;
             self.seq += 1;
             self.shards.push(shard);
         }
@@ -299,32 +303,63 @@ fn serve_img(
 {
     let listener = CriuListener::bind_for_restore(images_dir)?;
     emit_progress(progress_pipe, "socket-init");
-    let mut criu = listener.into_accept()?;
+    let criu = listener.into_accept()?;
 
     let mut filenames_of_sent_files = HashSet::new();
 
-    // XXX Currently, CRIU reads image files sequentially. If it were to read files in an
-    // interleaved fashion, we would have to use the Poller to avoid deadlocks.
-    while let Some(filename) = criu.read_next_file_request()? {
-        match mem_store.remove(&filename) {
-            Some(memory_file) => {
-                filenames_of_sent_files.insert(filename.clone());
-                criu.send_file_reply(true)?; // true means that the file exists.
-                let mut pipe = criu.recv_pipe()?;
-                // Try setting the pipe capacity. Failing is okay.
-                let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
-                memory_file.drain(&mut pipe)
-                    .with_context(|| format!("while serving file {}", &filename))?;
+    enum PollType {
+        Criu(CriuConnection),
+        ImageFile(String, image_store::mem::NonBlockingPipeWriter),
+    }
+    let mut poller = Poller::new()?;
+    poller.add(criu.as_raw_fd(), PollType::Criu(criu), EpollFlags::EPOLLIN)?;
+
+    while let Some((poll_key, poll_obj)) = poller.poll(4)? {
+        match poll_obj {
+            PollType::Criu(criu) => {
+                match criu.read_next_file_request()? {
+                    Some(filename) => {
+                        let context = || format!("while serving file `{}`", filename);
+                        match mem_store.remove(&filename) {
+                            Some(memory_file) => {
+                                filenames_of_sent_files.insert(filename.clone());
+                                // true means that the file exists.
+                                criu.send_file_reply(true).with_context(context)?;
+                                let mut pipe = criu.recv_pipe().with_context(context)?;
+                                // Try setting the pipe capacity. Failing is okay.
+                                let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+
+                                let pipe_fd = pipe.as_raw_fd();
+                                if let Some(writer) = memory_file.nonblocking_drain(pipe).with_context(context)? {
+                                    poller.add(pipe_fd, PollType::ImageFile(filename, writer), EpollFlags::EPOLLOUT)?;
+                                }
+                            }
+                            None => {
+                                // If we keep the image file in our process, CRIU will also
+                                // have a copy of the image file. This uses x2 the memory for an image
+                                // file. For large files like memory pages, we could very much go over
+                                // the machine memory capacity.
+                                ensure!(!filenames_of_sent_files.contains(&filename),
+                                    "CRIU is requesting the image file `{}` multiple times. \
+                                    This is not allowed to keep the memory usage low", &filename);
+                                criu.send_file_reply(false).with_context(context)?; // false means that the file does not exist.
+                            }
+                        }
+                    }
+                    None => {
+                        // We are done receiving file requests. We can close the socket.
+                        // However, other files may still be transferring data.
+                        poller.remove(poll_key)?;
+                    }
+                }
             }
-            None => {
-                // If we keep the image file in our process, CRIU will also
-                // have a copy of the image file. This uses x2 the memory for an image
-                // file. For large files like memory pages, we could very much go over
-                // the machine memory capacity.
-                ensure!(!filenames_of_sent_files.contains(&filename),
-                    "CRIU is requesting the image file `{}` multiple times. \
-                    This is not allowed to keep the memory usage low", &filename);
-                criu.send_file_reply(false)?; // false means that the file does not exist.
+            PollType::ImageFile(filename, writer) => {
+                let context = || format!("while serving file `{}`", filename);
+                if !writer.drain().with_context(context)? {
+                    // EOF of the image file is reached. Note that the image file pipe file
+                    // descriptor is closed automatically as it is owned by the poller.
+                    poller.remove(poll_key)?;
+                }
             }
         }
     }

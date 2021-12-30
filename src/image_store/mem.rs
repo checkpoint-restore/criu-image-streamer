@@ -147,21 +147,27 @@ impl File {
         })
     }
 
-    pub fn drain(self, dst: &mut fs::File) -> Result<()> {
+    /// Writes the content of self into the dst pipe. If there's more to write,
+    /// we return an object to complete the write.
+    pub fn nonblocking_drain(self, mut dst: fs::File) -> Result<Option<NonBlockingPipeWriter>> {
         match self {
-            Small(chunk) => dst.write_all(&chunk)?,
+            Small(chunk) => {
+                // The small chunk fits within a PAGE_SIZE (by definition of
+                // MAX_SMALL_CHUNK_SIZE). Writing this little amount won't block
+                // because the pipe content is managed as a list of pages in the
+                // kernel.
+                dst.write_all(&chunk)?;
+                Ok(None)
+            },
             Large(chunks) => {
-                for chunk in chunks {
-                    // We can vmsplice() because the chunk is backed by our mmap buffer.
-                    // It will be unmapped after the vmsplice guaranteeing that memory pages
-                    // are not going to be recycled and modified, which is a problem for
-                    // vmsplice().
-                    dst.vmsplice_all(&chunk)?;
+                let mut writer = NonBlockingPipeWriter { dst, chunks, chunk_offset: 0 };
+                if !writer.drain()? {
+                    Ok(None)
+                } else {
+                    Ok(Some(writer))
                 }
             }
-        };
-
-        Ok(())
+        }
     }
 
     pub fn reader(&self) -> FileReader {
@@ -170,6 +176,35 @@ impl File {
             Large(chunks) => chunks.iter().map(|chunk| &chunk[..]).collect(),
         };
         FileReader { chunks }
+    }
+}
+
+pub struct NonBlockingPipeWriter {
+    dst: fs::File,
+    chunks: VecDeque<MmapBuf>,
+    chunk_offset: usize,
+}
+
+impl NonBlockingPipeWriter {
+    pub fn drain(&mut self) -> Result<bool> {
+        while let Some(chunk) = self.chunks.front_mut() {
+            match self.dst.nonblocking_vmsplice(&chunk[self.chunk_offset..])? {
+                Some(written) => {
+                    // This is a partial write. We'll have to come back to it later.
+                    // Note that it is unsafe to modify the current chunk at this point.
+                    self.chunk_offset += written;
+                    return Ok(true)
+                }
+                None => {
+                    // The whole chunk was drained to the pipe. Moving on to the next chunk.
+                    // This effectively unmaps the chunk, freeing memory.
+                    self.chunks.pop_front();
+                    self.chunk_offset = 0;
+                }
+            }
+        }
+
+        Ok(false)
     }
 }
 
