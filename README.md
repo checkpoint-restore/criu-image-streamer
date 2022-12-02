@@ -49,8 +49,7 @@ of bugs often encountered when using other low-level languages.
 Usage
 -----
 
-**Note**: At the moment, CRIU from the `criu-dev` branch is needed. Not
-`master`. You may need to compile CRIU from source.
+**Note**: criu-image-streamer requires CRIU version 3.15 or newer.
 
 The CLI interface of criu-image-streamer is the following:
 
