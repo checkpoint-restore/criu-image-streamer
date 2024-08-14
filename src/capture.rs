@@ -274,9 +274,9 @@ pub fn capture(
     // First, we need to listen on the unix socket and notify the progress pipe that
     // we are ready. We do this ASAP because our controller is blocking on us to start CRIU.
     create_dir_all(images_dir)?;
-    let listener = CriuListener::bind_for_capture(images_dir)?;
+    let criu_listener = CriuListener::bind_for_capture(images_dir)?;
 
-    emit_progress(&mut progress_pipe, "socket-init");
+    emit_progress(&mut progress_pipe, "socket-init-criu");
 
     // The kernel may limit the number of allocated pages for pipes, we must do it before setting
     // the pipe size of external file pipes as shard pipes are more performance sensitive.
@@ -284,7 +284,7 @@ pub fn capture(
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect::<Result<_>>()?;
 
     // We are ready to get to work. Accept CRIU's connection.
-    let criu = listener.into_accept()?;
+    let criu = criu_listener.into_accept()?;
 
     // Setup the poller to monitor the server socket and image files' pipes
     enum PollType {
@@ -350,9 +350,41 @@ pub fn capture(
             }
         }
     }
+    //img_serializer.write_image_eof(progress_pipe)?;   // enable these two lines and disable
+    //emit_progress(progress_pipe, "criu: wrote image eof"); // the rest* for normal CRIU operation
 
+    let ced_listener = CriuListener::bind_for_capture_ced(images_dir)?;
+    emit_progress(&mut progress_pipe, "socket-init-cedana");
+    let ced = ced_listener.into_accept()?;
+    poller.add(ced.as_raw_fd(), PollType::Criu(ced), EpollFlags::EPOLLIN)?;
+
+    while let Some((poll_key, poll_obj)) = poller.poll(8)? {
+        match poll_obj {
+            PollType::Criu(ced) => {
+                match ced.read_next_file_request()? {
+                    Some(filename) => {
+                        let pipe = ced.recv_pipe()?;
+                        let img_file = ImageFile::new(filename, pipe);
+                        poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
+                                   EpollFlags::EPOLLIN)?;
+                    }
+                    None => {
+                        // We are done receiving file requests. We can close the socket.
+                        // However, other files may still be transferring data.
+                        poller.remove(poll_key)?;
+                    }
+                }
+            }
+            PollType::ImageFile(img_file) => {
+                if !img_serializer.drain_img_file(img_file)? {
+                    // EOF of the image file is reached. Note that the image file pipe file
+                    // descriptor is closed automatically as it is owned by the poller.
+                    poller.remove(poll_key)?;
+                }
+            }
+        }
+    }
     img_serializer.write_image_eof()?;
-
     let stats = {
         let transfer_duration_millis = start_time.elapsed().as_millis();
         Stats {

@@ -297,12 +297,44 @@ fn serve_img(
     mem_store: &mut image_store::mem::Store,
 ) -> Result<()>
 {
-    let listener = CriuListener::bind_for_restore(images_dir)?;
-    emit_progress(progress_pipe, "socket-init");
-    let mut criu = listener.into_accept()?;
+    let ced_listener = CriuListener::bind_for_restore_ced(images_dir)?;
+    emit_progress(progress_pipe, "socket-init-cedana");
+    let mut ced = ced_listener.into_accept()?;
 
     let mut filenames_of_sent_files = HashSet::new();
+    let mut ced_extracted = 0;
+    while ced_extracted == 0 {
+        if let Some(filename) = ced.read_next_file_request()? {
+            if filename == "checkpoint_state.json" {
+                match mem_store.remove(&filename) {
+                    Some(memory_file) => {
+                        filenames_of_sent_files.insert(filename.clone());
+                        ced.send_file_reply(true)?; // true means that the file exists.
+                        let mut pipe = ced.recv_pipe()?;
+                        // Try setting the pipe capacity. Failing is okay.
+                        let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+                        memory_file.drain(&mut pipe)
+                            .with_context(|| format!("while serving file {}", &filename))?;
+                        ced_extracted += 1;
+                    }
+                    None => {
+                        // If we keep the image file in our process, CRIU will also
+                        // have a copy of the image file. This uses x2 the memory for an image
+                        // file. For large files like memory pages, we could very much go over
+                        // the machine memory capacity.
+                        ensure!(!filenames_of_sent_files.contains(&filename),
+                            "Cedana is requesting the image file `{}` multiple times. \
+                            This is not allowed to keep the memory usage low", &filename);
+                        ced.send_file_reply(false)?; // false means that the file does not exist.
+                    }
+                }
+            }
+        }
+    }
 
+    let criu_listener = CriuListener::bind_for_restore(images_dir)?;
+    emit_progress(progress_pipe, "socket-init-criu");
+    let mut criu = criu_listener.into_accept()?;
     // XXX Currently, CRIU reads image files sequentially. If it were to read files in an
     // interleaved fashion, we would have to use the Poller to avoid deadlocks.
     while let Some(filename) = criu.read_next_file_request()? {

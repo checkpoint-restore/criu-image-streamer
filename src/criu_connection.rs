@@ -27,6 +27,8 @@ use anyhow::{Result, Context};
 
 const IMG_STREAMER_CAPTURE_SOCKET_NAME: &str = "streamer-capture.sock";
 const IMG_STREAMER_SERVE_SOCKET_NAME: &str = "streamer-serve.sock";
+const CED_CAPTURE_SOCKET_NAME: &str = "ced-capture.sock";
+const CED_SERVE_SOCKET_NAME: &str = "ced-serve.sock";
 
 /// The role of the `CriuListener` and `CriuConnection` is to handle communication with CRIU over
 /// the image socket.
@@ -51,8 +53,16 @@ impl CriuListener {
         Self::bind(&images_dir.join(IMG_STREAMER_CAPTURE_SOCKET_NAME))
     }
 
+    pub fn bind_for_capture_ced(images_dir: &Path) -> Result<Self> {
+        Self::bind(&images_dir.join(CED_CAPTURE_SOCKET_NAME))
+    }
+
     pub fn bind_for_restore(images_dir: &Path) -> Result<Self> {
         Self::bind(&images_dir.join(IMG_STREAMER_SERVE_SOCKET_NAME))
+    }
+
+    pub fn bind_for_restore_ced(images_dir: &Path) -> Result<Self> {
+        Self::bind(&images_dir.join(CED_SERVE_SOCKET_NAME))
     }
 
     // into_accept() drops the listener. There is no need for having multiple CRIU connections,
