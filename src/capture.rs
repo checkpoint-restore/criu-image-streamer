@@ -20,7 +20,6 @@ use std::{
     path::Path,
     sync::Once,
     rc::Rc,
-    fs,
 };
 use crate::{
     poller::{Poller, EpollFlags},
@@ -266,17 +265,13 @@ impl<'a> ImageSerializer<'a> {
 /// The description of arguments can be found in main.rs
 pub fn capture(
     images_dir: &Path,
-    mut progress_pipe: fs::File,
     mut shard_pipes: Vec<UnixPipe>,
-    ext_file_pipes: Vec<(String, UnixPipe)>,
-) -> Result<()>
+) -> Result<ShardStat>
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
     // we are ready. We do this ASAP because our controller is blocking on us to start CRIU.
     create_dir_all(images_dir)?;
     let criu_listener = CriuListener::bind_for_capture(images_dir)?;
-
-    emit_progress(&mut progress_pipe, "socket-init-criu");
 
     // The kernel may limit the number of allocated pages for pipes, we must do it before setting
     // the pipe size of external file pipes as shard pipes are more performance sensitive.
@@ -293,11 +288,6 @@ pub fn capture(
     }
     let mut poller = Poller::new()?;
     poller.add(criu.as_raw_fd(), PollType::Criu(criu), EpollFlags::EPOLLIN)?;
-
-    for (filename, pipe) in ext_file_pipes {
-        let img_file = ImageFile::new(filename, pipe);
-        poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file), EpollFlags::EPOLLIN)?;
-    }
 
     // Used to compute transfer speed. But the real start is when we call
     // `notify_checkpoint_start_once()`
@@ -325,7 +315,6 @@ pub fn capture(
                             // has been stopped.
                             notify_checkpoint_start_once.call_once(|| {
                                 start_time = Instant::now();
-                                emit_progress(&mut progress_pipe, "checkpoint-start");
                             });
                         }
 
@@ -350,11 +339,7 @@ pub fn capture(
             }
         }
     }
-    //img_serializer.write_image_eof(progress_pipe)?;   // enable these two lines and disable
-    //emit_progress(progress_pipe, "criu: wrote image eof"); // the rest* for normal CRIU operation
-
     let ced_listener = CriuListener::bind_for_capture_ced(images_dir)?;
-    emit_progress(&mut progress_pipe, "socket-init-cedana");
     let ced = ced_listener.into_accept()?;
     poller.add(ced.as_raw_fd(), PollType::Criu(ced), EpollFlags::EPOLLIN)?;
 
@@ -386,15 +371,12 @@ pub fn capture(
     }
     img_serializer.write_image_eof()?;
     let stats = {
-        let transfer_duration_millis = start_time.elapsed().as_millis();
-        Stats {
-            shards: shards.iter().map(|s| ShardStat {
-                size: s.bytes_written,
-                transfer_duration_millis,
-            }).collect(),
-        }
+        let transfer_duration_millis = start_time.elapsed().as_millis().try_into().unwrap();
+        shards.iter().map(|s| ShardStat {
+            size: s.bytes_written,
+            transfer_duration_millis,
+        }).next().expect("Expected at least one shard")
     };
-    emit_progress(&mut progress_pipe, &serde_json::to_string(&stats)?);
 
-    Ok(())
+    Ok(stats)
 }
