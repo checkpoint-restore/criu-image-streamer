@@ -387,7 +387,7 @@ pub fn serve(
 
     let mut mem_store = image_store::mem::Store::default();
     let stats = drain_shards_into_img_store(&mut mem_store, shard_pipes)?;
-    serve_img(&mut mem_store,ced_listener, criu_listener)?;
+    serve_img(&mut mem_store, ced_listener, criu_listener)?;
 
     Ok(stats)
 }

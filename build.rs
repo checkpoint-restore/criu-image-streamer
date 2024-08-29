@@ -29,6 +29,4 @@ fn main() {
     prost_build::compile_protos(&get_proto_files("proto/criu"),
                                 &[PathBuf::from("proto/criu")])
         .expect("Failed to generate protobuf wrappers for ./proto/criu/*.proto");
-    tonic_build::compile_protos("proto/comm.proto")
-        .unwrap_or_else(|e| panic!("Failed to compile protos {:?}", e));
 }

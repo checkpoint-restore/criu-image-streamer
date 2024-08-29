@@ -17,7 +17,6 @@ use std::{
     os::unix::io::AsRawFd,
     time::Instant,
     cmp::{min, max},
-    path::Path,
     sync::Once,
     rc::Rc,
 };
@@ -264,14 +263,13 @@ impl<'a> ImageSerializer<'a> {
 
 /// The description of arguments can be found in main.rs
 pub fn capture(
-    images_dir: &Path,
     mut shard_pipes: Vec<UnixPipe>,
+    criu_listener: CriuListener,
+    ced_listener: CriuListener,
 ) -> Result<ShardStat>
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
     // we are ready. We do this ASAP because our controller is blocking on us to start CRIU.
-    create_dir_all(images_dir)?;
-    let criu_listener = CriuListener::bind_for_capture(images_dir)?;
 
     // The kernel may limit the number of allocated pages for pipes, we must do it before setting
     // the pipe size of external file pipes as shard pipes are more performance sensitive.
@@ -339,7 +337,7 @@ pub fn capture(
             }
         }
     }
-    let ced_listener = CriuListener::bind_for_capture_ced(images_dir)?;
+
     let ced = ced_listener.into_accept()?;
     poller.add(ced.as_raw_fd(), PollType::Criu(ced), EpollFlags::EPOLLIN)?;
 
