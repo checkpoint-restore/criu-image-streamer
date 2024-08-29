@@ -17,7 +17,6 @@ use std::{
     os::unix::io::AsRawFd,
     time::Instant,
     path::Path,
-    fs,
 };
 use crate::{
     criu_connection::CriuListener,
@@ -28,7 +27,6 @@ use crate::{
     impl_ord_by,
     image_store,
     image_store::{ImageStore, ImageFile},
-    image_patcher::patch_img,
 };
 use nix::poll::{poll, PollFd, PollFlags};
 use anyhow::{Result, Context};
@@ -67,7 +65,7 @@ const SHARD_PIPE_DESIRED_CAPACITY: i32 = 512*KB as i32;
 
 struct Shard {
     pipe: UnixPipe,
-    transfer_duration_millis: u128,
+    transfer_duration_millis: u64,
     bytes_read: u64,
 }
 
@@ -212,7 +210,7 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
     }
 
     fn mark_shard_eof(&self, shard: &mut Shard) {
-        shard.transfer_duration_millis = self.start_time.elapsed().as_millis();
+        shard.transfer_duration_millis = self.start_time.elapsed().as_millis().try_into().unwrap();
     }
 
     fn drain_shard(&mut self, shard: &'a mut Shard) -> Result<()> {
@@ -292,17 +290,45 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
 
 /// `serve_img()` serves the in-memory image store to CRIU.
 fn serve_img(
-    images_dir: &Path,
-    progress_pipe: &mut fs::File,
     mem_store: &mut image_store::mem::Store,
+    ced_listener: CriuListener,
+    criu_listener: CriuListener,
 ) -> Result<()>
 {
-    let listener = CriuListener::bind_for_restore(images_dir)?;
-    emit_progress(progress_pipe, "socket-init");
-    let mut criu = listener.into_accept()?;
+    let mut ced = ced_listener.into_accept()?;
 
     let mut filenames_of_sent_files = HashSet::new();
+    let mut ced_extracted = 0;
+    while ced_extracted == 0 {
+        if let Some(filename) = ced.read_next_file_request()? {
+            if filename == "checkpoint_state.json" {
+                match mem_store.remove(&filename) {
+                    Some(memory_file) => {
+                        filenames_of_sent_files.insert(filename.clone());
+                        ced.send_file_reply(true)?; // true means that the file exists.
+                        let mut pipe = ced.recv_pipe()?;
+                        // Try setting the pipe capacity. Failing is okay.
+                        let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+                        memory_file.drain(&mut pipe)
+                            .with_context(|| format!("while serving file {}", &filename))?;
+                        ced_extracted += 1;
+                    }
+                    None => {
+                        // If we keep the image file in our process, CRIU will also
+                        // have a copy of the image file. This uses x2 the memory for an image
+                        // file. For large files like memory pages, we could very much go over
+                        // the machine memory capacity.
+                        ensure!(!filenames_of_sent_files.contains(&filename),
+                            "Cedana is requesting the image file `{}` multiple times. \
+                            This is not allowed to keep the memory usage low", &filename);
+                        ced.send_file_reply(false)?; // false means that the file does not exist.
+                    }
+                }
+            }
+        }
+    }
 
+    let mut criu = criu_listener.into_accept()?;
     // XXX Currently, CRIU reads image files sequentially. If it were to read files in an
     // interleaved fashion, we would have to use the Poller to avoid deadlocks.
     while let Some(filename) = criu.read_next_file_request()? {
@@ -334,69 +360,48 @@ fn serve_img(
 
 fn drain_shards_into_img_store<Store: ImageStore>(
     img_store: &mut Store,
-    progress_pipe: &mut fs::File,
     shard_pipes: Vec<UnixPipe>,
-    ext_file_pipes: Vec<(String, UnixPipe)>,
-) -> Result<()>
+) -> Result<ShardStat>
 {
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect();
 
-    // The content of the `ext_file_pipes` are streamed out directly, and not buffered in memory.
-    // This is important to avoid blowing up our memory budget. These external files typically
-    // contain a checkpointed filesystem, which is large.
     let mut overlayed_img_store = image_store::fs_overlay::Store::new(img_store);
-    for (filename, mut pipe) in ext_file_pipes {
-        // Despite the misleading name, the pipe is not for CRIU, it's most likely for `tar`, but
-        // it gets to enjoy the same pipe capacity. If we fail to increase the pipe capacity,
-        // it's okay. This is just for better performance.
-        let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
-        overlayed_img_store.add_overlay(filename, pipe);
-    }
-
     let mut img_deserializer = ImageDeserializer::new(&mut overlayed_img_store, &mut shards);
     img_deserializer.drain_all()?;
 
-    let stats = Stats {
-        shards: shards.iter().map(|s| ShardStat {
+    let stats = shards.iter().map(|s| ShardStat {
             size: s.bytes_read,
             transfer_duration_millis: s.transfer_duration_millis,
-        }).collect(),
-    };
-    emit_progress(progress_pipe, &serde_json::to_string(&stats)?);
+        }).next().expect("Expected at least one shard");
 
-    Ok(())
+    Ok(stats)
 }
 
 /// Description of the arguments can be found in main.rs
-pub fn serve(images_dir: &Path,
-    mut progress_pipe: fs::File,
+pub fn serve(
     shard_pipes: Vec<UnixPipe>,
-    ext_file_pipes: Vec<(String, UnixPipe)>,
-    tcp_listen_remaps: Vec<(u16, u16)>,
-) -> Result<()>
+    ced_listener: CriuListener,
+    criu_listener: CriuListener,
+) -> Result<ShardStat>
 {
-    create_dir_all(images_dir)?;
 
     let mut mem_store = image_store::mem::Store::default();
-    drain_shards_into_img_store(&mut mem_store, &mut progress_pipe, shard_pipes, ext_file_pipes)?;
-    patch_img(&mut mem_store, tcp_listen_remaps)?;
-    serve_img(images_dir, &mut progress_pipe, &mut mem_store)?;
+    let stats = drain_shards_into_img_store(&mut mem_store, shard_pipes)?;
+    serve_img(&mut mem_store, ced_listener, criu_listener)?;
 
-    Ok(())
+    Ok(stats)
 }
 
 /// Description of the arguments can be found in main.rs
 pub fn extract(images_dir: &Path,
-    mut progress_pipe: fs::File,
     shard_pipes: Vec<UnixPipe>,
-    ext_file_pipes: Vec<(String, UnixPipe)>,
-) -> Result<()>
+) -> Result<ShardStat>
 {
     create_dir_all(images_dir)?;
 
     // extract on disk
     let mut file_store = image_store::fs::Store::new(images_dir);
-    drain_shards_into_img_store(&mut file_store, &mut progress_pipe, shard_pipes, ext_file_pipes)?;
+    let stats = drain_shards_into_img_store(&mut file_store, shard_pipes)?;
 
-    Ok(())
+    Ok(stats)
 }

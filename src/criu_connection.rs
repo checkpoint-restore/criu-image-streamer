@@ -25,11 +25,8 @@ use crate::{
 };
 use anyhow::{Result, Context};
 
-const IMG_STREAMER_CAPTURE_SOCKET_NAME: &str = "streamer-capture.sock";
-const IMG_STREAMER_SERVE_SOCKET_NAME: &str = "streamer-serve.sock";
-
-/// The role of the `CriuListener` and `CriuConnection` is to handle communication with CRIU over
-/// the image socket.
+/// The role of the `CriuListener` and `CriuConnection` is to handle communication with CRIU and
+/// Cedana over the image sockets.
 
 pub struct CriuListener {
     listener: UnixListener,
@@ -47,12 +44,12 @@ impl CriuListener {
         Ok(Self { listener })
     }
 
-    pub fn bind_for_capture(images_dir: &Path) -> Result<Self> {
-        Self::bind(&images_dir.join(IMG_STREAMER_CAPTURE_SOCKET_NAME))
+    pub fn bind_for_capture(images_dir: &Path, socket_name: &str) -> Result<Self> {
+        Self::bind(&images_dir.join(socket_name))
     }
 
-    pub fn bind_for_restore(images_dir: &Path) -> Result<Self> {
-        Self::bind(&images_dir.join(IMG_STREAMER_SERVE_SOCKET_NAME))
+    pub fn bind_for_restore(images_dir: &Path, socket_name: &str) -> Result<Self> {
+        Self::bind(&images_dir.join(socket_name))
     }
 
     // into_accept() drops the listener. There is no need for having multiple CRIU connections,
