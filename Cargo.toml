@@ -35,5 +35,5 @@ panic = 'abort'
 strip = true
 
 [[bin]]
-name = "server"
+name = "cedana-image-streamer"
 path = "src/comm.rs"

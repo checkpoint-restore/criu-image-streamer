@@ -66,7 +66,7 @@ fn do_capture(dir_path: &Path) -> Result<()> {
 
     thread::spawn(move || {
         let stats = capture(shard_pipes, criu_listener, ced_listener);
-        let stats_ref = stats.as_ref().unwrap();
+        let _stats_ref = stats.as_ref().unwrap();
     });
     let mut input_file = unsafe { File::from_raw_fd(r_fd) };
     let mut encoder = FrameEncoder::new(output_file);
