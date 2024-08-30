@@ -298,31 +298,27 @@ fn serve_img(
     let mut ced = ced_listener.into_accept()?;
 
     let mut filenames_of_sent_files = HashSet::new();
-    let mut ced_extracted = 0;
-    while ced_extracted == 0 {
-        if let Some(filename) = ced.read_next_file_request()? {
-            if filename == "checkpoint_state.json" {
-                match mem_store.remove(&filename) {
-                    Some(memory_file) => {
-                        filenames_of_sent_files.insert(filename.clone());
-                        ced.send_file_reply(true)?; // true means that the file exists.
-                        let mut pipe = ced.recv_pipe()?;
-                        // Try setting the pipe capacity. Failing is okay.
-                        let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
-                        memory_file.drain(&mut pipe)
-                            .with_context(|| format!("while serving file {}", &filename))?;
-                        ced_extracted += 1;
-                    }
-                    None => {
-                        // If we keep the image file in our process, CRIU will also
-                        // have a copy of the image file. This uses x2 the memory for an image
-                        // file. For large files like memory pages, we could very much go over
-                        // the machine memory capacity.
-                        ensure!(!filenames_of_sent_files.contains(&filename),
-                            "Cedana is requesting the image file `{}` multiple times. \
-                            This is not allowed to keep the memory usage low", &filename);
-                        ced.send_file_reply(false)?; // false means that the file does not exist.
-                    }
+    while let Some(filename) = ced.read_next_file_request()? {
+        if filename == "checkpoint_state.json" {
+            match mem_store.remove(&filename) {
+                Some(memory_file) => {
+                    filenames_of_sent_files.insert(filename.clone());
+                    ced.send_file_reply(true)?; // true means that the file exists.
+                    let mut pipe = ced.recv_pipe()?;
+                    // Try setting the pipe capacity. Failing is okay.
+                    let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+                    memory_file.drain(&mut pipe)
+                        .with_context(|| format!("while serving file {}", &filename))?;
+                }
+                None => {
+                    // If we keep the image file in our process, CRIU will also
+                    // have a copy of the image file. This uses x2 the memory for an image
+                    // file. For large files like memory pages, we could very much go over
+                    // the machine memory capacity.
+                    ensure!(!filenames_of_sent_files.contains(&filename),
+                        "Cedana is requesting the image file `{}` multiple times. \
+                        This is not allowed to keep the memory usage low", &filename);
+                    ced.send_file_reply(false)?; // false means that the file does not exist.
                 }
             }
         }
