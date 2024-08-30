@@ -57,6 +57,7 @@ fn do_capture(dir_path: &Path) -> Result<()> {
 
     let _ret = create_dir_all(dir_path);
 
+    let gpu_listener = CriuListener::bind_for_capture(dir_path, "gpu-capture.sock")?;
     let criu_listener = CriuListener::bind_for_capture(dir_path, "streamer-capture.sock")?;
     let ced_listener = CriuListener::bind_for_capture(dir_path, "ced-capture.sock")?;
 
@@ -65,7 +66,7 @@ fn do_capture(dir_path: &Path) -> Result<()> {
     eprintln!("r");
 
     thread::spawn(move || {
-        let stats = capture(shard_pipes, criu_listener, ced_listener);
+        let stats = capture(shard_pipes, gpu_listener, criu_listener, ced_listener);
         let _stats_ref = stats.as_ref().unwrap();
     });
     let mut input_file = unsafe { File::from_raw_fd(r_fd) };

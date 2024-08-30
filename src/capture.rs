@@ -264,6 +264,7 @@ impl<'a> ImageSerializer<'a> {
 /// The description of arguments can be found in main.rs
 pub fn capture(
     mut shard_pipes: Vec<UnixPipe>,
+    gpu_listener: CriuListener,
     criu_listener: CriuListener,
     ced_listener: CriuListener,
 ) -> Result<ShardStat>
@@ -277,7 +278,7 @@ pub fn capture(
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect::<Result<_>>()?;
 
     // We are ready to get to work. Accept CRIU's connection.
-    let criu = criu_listener.into_accept()?;
+    let gpu = gpu_listener.into_accept()?;
 
     // Setup the poller to monitor the server socket and image files' pipes
     enum PollType {
@@ -285,7 +286,7 @@ pub fn capture(
         ImageFile(ImageFile),
     }
     let mut poller = Poller::new()?;
-    poller.add(criu.as_raw_fd(), PollType::Criu(criu), EpollFlags::EPOLLIN)?;
+    poller.add(gpu.as_raw_fd(), PollType::Criu(gpu), EpollFlags::EPOLLIN)?;
 
     // Used to compute transfer speed. But the real start is when we call
     // `notify_checkpoint_start_once()`
@@ -294,6 +295,54 @@ pub fn capture(
 
     // The image serializer reads data from the image files, and writes it in chunks into shards.
     let mut img_serializer = ImageSerializer::new(&mut shards, shard_pipe_capacity);
+
+    // Process all inputs (ext files, CRIU's connection, and CRIU's files) until they reach EOF.
+    // As CRIU requests to write files, we receive new unix pipes that are added to the poller.
+    // We use an epoll_capacity of 8. This doesn't really matter as the number of concurrent
+    // connection is typically at most 2.
+    let epoll_capacity = 8;
+    while let Some((poll_key, poll_obj)) = poller.poll(epoll_capacity)? {
+        match poll_obj {
+            PollType::Criu(gpu) => {
+                match gpu.read_next_file_request()? {
+                    Some(filename) => {
+                        if filename != "cpuinfo.img" {
+                            // Once the checkpoint has started, we must notify the controller.
+                            // This is useful for our controller to kick tarring the file system as
+                            // the application is guaranteed to be stopped.
+                            // We skip cpuinfo.img because it doesn't tell us if the application
+                            // has been stopped.
+                            notify_checkpoint_start_once.call_once(|| {
+                                start_time = Instant::now();
+                            });
+                        }
+
+                        let pipe = gpu.recv_pipe()?;
+                        let img_file = ImageFile::new(filename, pipe);
+                        poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
+                                   EpollFlags::EPOLLIN)?;
+                    }
+                    None => {
+                        // We are done receiving file requests. We can close the socket.
+                        // However, other files may still be transferring data.
+                        poller.remove(poll_key)?;
+                    }
+                }
+            }
+            PollType::ImageFile(img_file) => {
+                if !img_serializer.drain_img_file(img_file)? {
+                    // EOF of the image file is reached. Note that the image file pipe file
+                    // descriptor is closed automatically as it is owned by the poller.
+                    poller.remove(poll_key)?;
+                }
+            }
+        }
+    }
+
+    // We are ready to get to work. Accept CRIU's connection.
+    let criu = criu_listener.into_accept()?;
+
+    poller.add(criu.as_raw_fd(), PollType::Criu(criu), EpollFlags::EPOLLIN)?;
 
     // Process all inputs (ext files, CRIU's connection, and CRIU's files) until they reach EOF.
     // As CRIU requests to write files, we receive new unix pipes that are added to the poller.
