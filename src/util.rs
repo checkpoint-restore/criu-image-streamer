@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
+use chrono::{DateTime, Local};
 use prost::Message;
 use std::{
     mem::size_of,
@@ -19,6 +20,7 @@ use std::{
     os::unix::io::{RawFd, AsRawFd},
     io::{Read, Write},
     path::Path,
+    time::SystemTime,
     fs,
 };
 use nix::{
@@ -38,6 +40,13 @@ lazy_static::lazy_static! {
     pub static ref PAGE_SIZE: usize = sysconf(SysconfVar::PAGE_SIZE)
         .expect("Failed to determine PAGE_SIZE")
         .expect("Failed to determine PAGE_SIZE") as usize;
+}
+
+pub fn prnt(txt: &str) {
+    let system_time = SystemTime::now();
+    let datetime: DateTime<Local> = system_time.into();
+    let time = datetime.format("%H:%M:%S%.6f").to_string();
+    println!("\x1b[90m{}\x1b[0m [\x1b[1m{}\x1b[0m] {}", time, file!(), txt);
 }
 
 /// read_bytes_next() attempts to read exactly the number of bytes requested.

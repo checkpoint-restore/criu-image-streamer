@@ -267,7 +267,7 @@ pub fn capture(
     gpu_listener: CriuListener,
     criu_listener: CriuListener,
     ced_listener: CriuListener,
-) -> Result<ShardStat>
+) -> Result<()>
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
     // we are ready. We do this ASAP because our controller is blocking on us to start CRIU.
@@ -277,7 +277,7 @@ pub fn capture(
     let shard_pipe_capacity = UnixPipe::increase_capacity(&mut shard_pipes, SHARD_PIPE_DESIRED_CAPACITY)?;
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect::<Result<_>>()?;
 
-    // We are ready to get to work. Accept CRIU's connection.
+    // We are ready to get to work. Accept cedana-gpu-controller's connection.
     let gpu = gpu_listener.into_accept()?;
 
     // Setup the poller to monitor the server socket and image files' pipes
@@ -306,16 +306,9 @@ pub fn capture(
             PollType::Criu(gpu) => {
                 match gpu.read_next_file_request()? {
                     Some(filename) => {
-                        if filename != "cpuinfo.img" {
-                            // Once the checkpoint has started, we must notify the controller.
-                            // This is useful for our controller to kick tarring the file system as
-                            // the application is guaranteed to be stopped.
-                            // We skip cpuinfo.img because it doesn't tell us if the application
-                            // has been stopped.
-                            notify_checkpoint_start_once.call_once(|| {
-                                start_time = Instant::now();
-                            });
-                        }
+                        notify_checkpoint_start_once.call_once(|| {
+                            start_time = Instant::now();
+                        });
 
                         let pipe = gpu.recv_pipe()?;
                         let img_file = ImageFile::new(filename, pipe);
@@ -354,17 +347,6 @@ pub fn capture(
             PollType::Criu(criu) => {
                 match criu.read_next_file_request()? {
                     Some(filename) => {
-                        if filename != "cpuinfo.img" {
-                            // Once the checkpoint has started, we must notify the controller.
-                            // This is useful for our controller to kick tarring the file system as
-                            // the application is guaranteed to be stopped.
-                            // We skip cpuinfo.img because it doesn't tell us if the application
-                            // has been stopped.
-                            notify_checkpoint_start_once.call_once(|| {
-                                start_time = Instant::now();
-                            });
-                        }
-
                         let pipe = criu.recv_pipe()?;
                         let img_file = ImageFile::new(filename, pipe);
                         poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
@@ -417,13 +399,5 @@ pub fn capture(
         }
     }
     img_serializer.write_image_eof()?;
-    let stats = {
-        let transfer_duration_millis = start_time.elapsed().as_millis().try_into().unwrap();
-        shards.iter().map(|s| ShardStat {
-            size: s.bytes_written,
-            transfer_duration_millis,
-        }).next().expect("Expected at least one shard")
-    };
-
-    Ok(stats)
+    Ok(())
 }

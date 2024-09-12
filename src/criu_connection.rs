@@ -14,6 +14,7 @@
 
 use std::{
     os::unix::net::{UnixStream, UnixListener},
+    os::unix::fs::PermissionsExt,
     os::unix::io::{RawFd, AsRawFd},
     path::Path,
     fs,
@@ -40,6 +41,10 @@ impl CriuListener {
         let _ = fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path)
             .with_context(|| format!("Failed to bind socket to {}", socket_path.display()))?;
+
+        let mut permissions = fs::metadata(socket_path)?.permissions();
+        permissions.set_mode(0o777);
+        fs::set_permissions(socket_path, permissions)?;
 
         Ok(Self { listener })
     }

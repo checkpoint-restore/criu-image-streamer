@@ -4,7 +4,7 @@ use image_streamer::{
     criu_connection::CriuListener,
     extract::serve,
     unix_pipe::UnixPipe,
-    util::create_dir_all,
+    util::{create_dir_all, prnt},
 };
 use libc::dup;
 use lz4_flex::frame::{FrameDecoder, FrameEncoder};
@@ -14,7 +14,9 @@ use std::{
     io::{self, Read, Write},
     os::unix::io::{FromRawFd, RawFd},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     thread,
+    time::Duration,
 };
 use structopt::{clap::AppSettings, StructOpt};
 
@@ -46,33 +48,83 @@ enum Operation {
     Serve,
 }
 
-fn do_capture(dir_path: &Path) -> Result<()> {
-    let (r_fd, w_fd): (RawFd, RawFd) = pipe()?;
+fn spawn_handles(
+    dir_path: PathBuf,
+    handle: Arc<Mutex<thread::JoinHandle<()>>>,
+    num_pipes: usize,
+    r_fds: Vec<RawFd>
+) -> Vec<thread::JoinHandle<()>> {
+    (0..num_pipes)
+        .map(|i| {
+            let handle = Arc::clone(&handle);
+            let r_fd = r_fds[i].clone();
+            let path = dir_path.clone();
+            thread::spawn(move || {
+                let output_file_path = path.join(&format!("img-{}.lz4", i));
+                let output_file = File::create(output_file_path)
+                                    .expect("Unable to create output file path");
+                let mut encoder = FrameEncoder::new(output_file);
+                let mut input_file = unsafe { File::from_raw_fd(r_fd) };
+                let mut buffer = [0; 1048576];
+                loop {
+                    match input_file.read(&mut buffer) {
+                        Ok(0) => {
+                            let handle = handle.lock().unwrap();
+                            if handle.is_finished() {
+                                let _ = encoder.finish();
+                                return;
+                            }
+                        }
+                        Ok(bytes_read) => encoder.write_all(&buffer[..bytes_read])
+                                            .expect("Unable to write all bytes"),
+                        Err(e) => {
+                            if e.kind() != io::ErrorKind::Interrupted {
+                                prnt(&format!("err={}",e));
+                                return;// Err(e.into());
+                            }
+                        }
+                    }
+                }
+            })
+        })
+        .collect()
+}
 
-    let dup_fd = unsafe { dup(w_fd) };
-    close(w_fd).expect("Failed to close original write file descriptor");
-    let shard_pipes: Vec<UnixPipe> = {
-        vec![unsafe { fs::File::from_raw_fd(dup_fd) }]
-    };
+fn join_handles(handles: Vec<thread::JoinHandle<()>>) {
+    for handle in handles {
+        let _ = handle.join().unwrap();
+    }
+}
+
+fn do_capture(dir_path: &Path) -> Result<()> {
+    let mut shard_pipes: Vec<UnixPipe> = Vec::new();
+    let mut r_fds: Vec<RawFd> = Vec::new();
+    let num_pipes = 8;
+    for _ in 0..num_pipes {
+        let (r_fd, w_fd): (RawFd, RawFd) = pipe()?;
+        let dup_fd = unsafe { dup(w_fd) };
+        close(w_fd).expect("Failed to close original write file descriptor");
+
+        r_fds.push(r_fd);
+        shard_pipes.push(unsafe { File::from_raw_fd(dup_fd) });
+    }
 
     let _ret = create_dir_all(dir_path);
 
     let gpu_listener = CriuListener::bind_for_capture(dir_path, "gpu-capture.sock")?;
     let criu_listener = CriuListener::bind_for_capture(dir_path, "streamer-capture.sock")?;
     let ced_listener = CriuListener::bind_for_capture(dir_path, "ced-capture.sock")?;
-
-    let output_file_path = dir_path.join("img.lz4");
-    let output_file = File::create(output_file_path)?;
     eprintln!("r");
 
-    thread::spawn(move || {
-        let stats = capture(shard_pipes, gpu_listener, criu_listener, ced_listener);
-        let _stats_ref = stats.as_ref().unwrap();
-    });
-    let mut input_file = unsafe { File::from_raw_fd(r_fd) };
-    let mut encoder = FrameEncoder::new(output_file);
-    let _copy_result = io::copy(&mut input_file, &mut encoder);
-    let _lz4_result = encoder.finish();
+    let handle = Arc::new(Mutex::new(thread::spawn(move || {
+        let _res = capture(shard_pipes, gpu_listener, criu_listener, ced_listener);
+        prnt("returned from capture");
+    })));
+    thread::sleep(Duration::from_millis(10));
+
+    let handles = spawn_handles(dir_path.to_path_buf(), handle, num_pipes, r_fds);
+    join_handles(handles);
+
     Ok(())
 }
 
