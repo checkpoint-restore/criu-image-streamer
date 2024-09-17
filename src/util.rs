@@ -42,11 +42,17 @@ lazy_static::lazy_static! {
         .expect("Failed to determine PAGE_SIZE") as usize;
 }
 
-pub fn prnt(txt: &str) {
+pub fn timestamp() -> String {
     let system_time = SystemTime::now();
     let datetime: DateTime<Local> = system_time.into();
-    let time = datetime.format("%H:%M:%S%.6f").to_string();
-    println!("\x1b[90m{}\x1b[0m [\x1b[1m{}\x1b[0m] {}", time, file!(), txt);
+    datetime.format("%H:%M:%S%.6f").to_string()
+}
+
+#[macro_export]
+macro_rules! prnt {
+    ($msg:expr) => {
+        println!("\x1b[90m{}\x1b[0m [\x1b[1m{}\x1b[0m] {}", crate::util::timestamp(), file!(), $msg);
+    };
 }
 
 /// read_bytes_next() attempts to read exactly the number of bytes requested.

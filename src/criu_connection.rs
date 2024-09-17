@@ -34,27 +34,20 @@ pub struct CriuListener {
 }
 
 impl CriuListener {
-    fn bind(socket_path: &Path) -> Result<Self> {
+    pub fn bind(images_dir: &Path, socket_name: &str) -> Result<Self> {
         // 1) We unlink the socket path to avoid EADDRINUSE on bind() if it already exists.
         // 2) We ignore the unlink error because we are most likely getting a -ENOENT.
         //    It is safe to do so as correctness is not impacted by unlink() failing.
-        let _ = fs::remove_file(socket_path);
-        let listener = UnixListener::bind(socket_path)
+        let socket_path = images_dir.join(socket_name);
+        let _ = fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path)
             .with_context(|| format!("Failed to bind socket to {}", socket_path.display()))?;
 
-        let mut permissions = fs::metadata(socket_path)?.permissions();
+        let mut permissions = fs::metadata(&socket_path)?.permissions();
         permissions.set_mode(0o777);
-        fs::set_permissions(socket_path, permissions)?;
+        fs::set_permissions(&socket_path, permissions)?;
 
         Ok(Self { listener })
-    }
-
-    pub fn bind_for_capture(images_dir: &Path, socket_name: &str) -> Result<Self> {
-        Self::bind(&images_dir.join(socket_name))
-    }
-
-    pub fn bind_for_restore(images_dir: &Path, socket_name: &str) -> Result<Self> {
-        Self::bind(&images_dir.join(socket_name))
     }
 
     // into_accept() drops the listener. There is no need for having multiple CRIU connections,

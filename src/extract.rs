@@ -292,6 +292,7 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
 fn serve_img(
     mem_store: &mut image_store::mem::Store,
     ced_listener: CriuListener,
+    gpu_listener: CriuListener,
     criu_listener: CriuListener,
 ) -> Result<()>
 {
@@ -299,27 +300,25 @@ fn serve_img(
 
     let mut filenames_of_sent_files = HashSet::new();
     while let Some(filename) = ced.read_next_file_request()? {
-        if filename == "checkpoint_state.json" {
-            match mem_store.remove(&filename) {
-                Some(memory_file) => {
-                    filenames_of_sent_files.insert(filename.clone());
-                    ced.send_file_reply(true)?; // true means that the file exists.
-                    let mut pipe = ced.recv_pipe()?;
-                    // Try setting the pipe capacity. Failing is okay.
-                    let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
-                    memory_file.drain(&mut pipe)
-                        .with_context(|| format!("while serving file {}", &filename))?;
-                }
-                None => {
-                    // If we keep the image file in our process, CRIU will also
-                    // have a copy of the image file. This uses x2 the memory for an image
-                    // file. For large files like memory pages, we could very much go over
-                    // the machine memory capacity.
-                    ensure!(!filenames_of_sent_files.contains(&filename),
-                        "Cedana is requesting the image file `{}` multiple times. \
-                        This is not allowed to keep the memory usage low", &filename);
-                    ced.send_file_reply(false)?; // false means that the file does not exist.
-                }
+        match mem_store.remove(&filename) {
+            Some(memory_file) => {
+                filenames_of_sent_files.insert(filename.clone());
+                ced.send_file_reply(true)?; // true means that the file exists.
+                let mut pipe = ced.recv_pipe()?;
+                // Try setting the pipe capacity. Failing is okay.
+                let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+                memory_file.drain(&mut pipe)
+                    .with_context(|| format!("while serving file {}", &filename))?;
+            }
+            None => {
+                // If we keep the image file in our process, CRIU will also
+                // have a copy of the image file. This uses x2 the memory for an image
+                // file. For large files like memory pages, we could very much go over
+                // the machine memory capacity.
+                ensure!(!filenames_of_sent_files.contains(&filename),
+                    "Cedana is requesting the image file `{}` multiple times. \
+                    This is not allowed to keep the memory usage low", &filename);
+                ced.send_file_reply(false)?; // false means that the file does not exist.
             }
         }
     }
@@ -351,13 +350,38 @@ fn serve_img(
         }
     }
 
+    let mut gpu = gpu_listener.into_accept()?;
+    while let Some(filename_prefix) = gpu.read_next_file_request()? {
+        match mem_store.remove_by_prefix(&filename_prefix) {
+            Some((filename, memory_file)) => {
+                filenames_of_sent_files.insert(filename.to_string().clone());
+                gpu.send_file_reply(true)?; // true means that the file exists.
+                let mut pipe = gpu.recv_pipe()?;
+                // Try setting the pipe capacity. Failing is okay.
+                let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+                memory_file.drain(&mut pipe)
+                   .with_context(|| format!("while serving file_prefix {}", &filename_prefix))?;
+            }
+            None => {
+                // If we keep the image file in our process, CRIU will also
+                // have a copy of the image file. This uses x2 the memory for an image
+                // file. For large files like memory pages, we could very much go over
+                // the machine memory capacity.
+                ensure!(!filenames_of_sent_files.contains(&filename_prefix),
+                    "cedana-gpu-controller is requesting the image file prefix `{}` multiple times. \
+                    This is not allowed to keep the memory usage low", &filename_prefix);
+                gpu.send_file_reply(false)?; // false means that the file does not exist.
+            }
+        }
+    }
+
     Ok(())
 }
 
 fn drain_shards_into_img_store<Store: ImageStore>(
     img_store: &mut Store,
     shard_pipes: Vec<UnixPipe>,
-) -> Result<ShardStat>
+) -> Result<()>
 {
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect();
 
@@ -365,39 +389,35 @@ fn drain_shards_into_img_store<Store: ImageStore>(
     let mut img_deserializer = ImageDeserializer::new(&mut overlayed_img_store, &mut shards);
     img_deserializer.drain_all()?;
 
-    let stats = shards.iter().map(|s| ShardStat {
-            size: s.bytes_read,
-            transfer_duration_millis: s.transfer_duration_millis,
-        }).next().expect("Expected at least one shard");
-
-    Ok(stats)
+    Ok(())
 }
 
 /// Description of the arguments can be found in main.rs
 pub fn serve(
     shard_pipes: Vec<UnixPipe>,
     ced_listener: CriuListener,
+    gpu_listener: CriuListener,
     criu_listener: CriuListener,
-) -> Result<ShardStat>
+) -> Result<()>
 {
 
     let mut mem_store = image_store::mem::Store::default();
-    let stats = drain_shards_into_img_store(&mut mem_store, shard_pipes)?;
-    serve_img(&mut mem_store, ced_listener, criu_listener)?;
+    let _ = drain_shards_into_img_store(&mut mem_store, shard_pipes)?;
+    serve_img(&mut mem_store, ced_listener, gpu_listener, criu_listener)?;
 
-    Ok(stats)
+    Ok(())
 }
 
 /// Description of the arguments can be found in main.rs
 pub fn extract(images_dir: &Path,
     shard_pipes: Vec<UnixPipe>,
-) -> Result<ShardStat>
+) -> Result<()>
 {
     create_dir_all(images_dir)?;
 
     // extract on disk
     let mut file_store = image_store::fs::Store::new(images_dir);
-    let stats = drain_shards_into_img_store(&mut file_store, shard_pipes)?;
+    let _ = drain_shards_into_img_store(&mut file_store, shard_pipes)?;
 
-    Ok(stats)
+    Ok(())
 }
