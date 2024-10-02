@@ -21,7 +21,8 @@ use std::{
 };
 use crate::{
     criu,
-    util::{pb_write, recv_fd, pb_read_next},
+    prnt,
+    util::{pb_write, recv_fd, pb_read_next, pb_read_next_breaking},
     unix_pipe::{UnixPipe, UnixPipeImpl},
 };
 use anyhow::{Result, Context};
@@ -60,14 +61,41 @@ impl CriuListener {
 
 pub struct CriuConnection {
     socket: UnixStream,
+    //path: &Path,
 }
 
 impl CriuConnection {
     /// Read and return the next file request. If reached EOF, returns Ok(None).
     pub fn read_next_file_request(&mut self) -> Result<Option<String>> {
+        prnt!("entered read_next_file_request");
         Ok(pb_read_next(&mut self.socket)?
             .map(|(req, _): (criu::ImgStreamerRequestEntry, _)| req.filename))
     }
+    pub fn read_next_file_request_breaking(&mut self, ready_path: &Path) -> Result<Option<String>> {
+        prnt!("entered read_next_file_request_breaking");
+        /*prnt!("entered read_next_serve_request");
+        //loop {
+
+            let fd = self.socket.as_raw_fd(); // Get the file descriptor from the socket
+            let mut fds = [PollFd::new(fd, PollFlags::POLLIN)]; // Poll for reading
+            prnt!("passed fd initialization");
+
+            let poll_result = poll(&mut fds, -1)?;
+            if ready_path.exists() {
+                prnt!("found ready file, exiting with Ok(None)");
+                return Ok(None);
+            }
+            if poll_result > 0 {
+                //prnt!("poll_result = 0, timeout expired with no events");
+                //return Ok(None);
+                prnt!("going to do pb_read_next on this socket");
+                return*/ Ok(pb_read_next_breaking(&mut self.socket, ready_path)?
+                    .map(|(req, _): (criu::ImgStreamerRequestEntry, _)| req.filename))
+            /*}
+            prnt!("not trying again");
+        return Ok(None)*/
+        //}
+   }
 
     /// Returns the data pipe that is used to transfer the file.
     pub fn recv_pipe(&mut self) -> Result<UnixPipe> {

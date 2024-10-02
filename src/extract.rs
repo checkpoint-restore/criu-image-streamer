@@ -27,6 +27,7 @@ use crate::{
     impl_ord_by,
     image_store,
     image_store::{ImageStore, ImageFile},
+    prnt,
 };
 use nix::poll::{poll, PollFd, PollFlags};
 use anyhow::{Result, Context};
@@ -291,17 +292,21 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
 /// `serve_img()` serves the in-memory image store to CRIU.
 fn serve_img(
     mem_store: &mut image_store::mem::Store,
+    ready_path: &Path,
     ced_listener: CriuListener,
     gpu_listener: CriuListener,
     criu_listener: CriuListener,
 ) -> Result<()>
 {
+    prnt!("entered serve_img");
     let mut ced = ced_listener.into_accept()?;
+    //ced.path = ready_path;
 
     let mut filenames_of_sent_files = HashSet::new();
-    while let Some(filename) = ced.read_next_file_request()? {
+    if let Some(filename) = ced.read_next_file_request()? {
         match mem_store.remove(&filename) {
             Some(memory_file) => {
+                prnt!(&format!("ced filename = {}",filename));
                 filenames_of_sent_files.insert(filename.clone());
                 ced.send_file_reply(true)?; // true means that the file exists.
                 let mut pipe = ced.recv_pipe()?;
@@ -322,13 +327,21 @@ fn serve_img(
             }
         }
     }
+    prnt!("done w ced");
 
     let mut criu = criu_listener.into_accept()?;
     // XXX Currently, CRIU reads image files sequentially. If it were to read files in an
     // interleaved fashion, we would have to use the Poller to avoid deadlocks.
-    while let Some(filename) = criu.read_next_file_request()? {
+
+    // Loop until the file exists
+    /*while !path.exists() {
+        println!("Waiting for Program 3 to touch the file...");
+        thread::sleep(Duration::from_secs(1));  // Poll every 1 second
+    }*/
+    while let Some(filename) = criu.read_next_file_request_breaking(ready_path)? {
         match mem_store.remove(&filename) {
             Some(memory_file) => {
+                prnt!(&format!("criu filename {}",filename));
                 filenames_of_sent_files.insert(filename.clone());
                 criu.send_file_reply(true)?; // true means that the file exists.
                 let mut pipe = criu.recv_pipe()?;
@@ -347,6 +360,10 @@ fn serve_img(
                     This is not allowed to keep the memory usage low", &filename);
                 criu.send_file_reply(false)?; // false means that the file does not exist.
             }
+        }
+        if ready_path.exists() {
+            prnt!("ready path exists, breaking");
+            break;
         }
     }
 
@@ -384,10 +401,14 @@ fn drain_shards_into_img_store<Store: ImageStore>(
 ) -> Result<()>
 {
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect();
+    prnt!("created shards from shard pipes");
 
     let mut overlayed_img_store = image_store::fs_overlay::Store::new(img_store);
+    prnt!("created image store");
     let mut img_deserializer = ImageDeserializer::new(&mut overlayed_img_store, &mut shards);
+    prnt!("created deserializer");
     img_deserializer.drain_all()?;
+    prnt!("done w drain all");
 
     Ok(())
 }
@@ -395,15 +416,19 @@ fn drain_shards_into_img_store<Store: ImageStore>(
 /// Description of the arguments can be found in main.rs
 pub fn serve(
     shard_pipes: Vec<UnixPipe>,
+    ready_path: &Path,
     ced_listener: CriuListener,
     gpu_listener: CriuListener,
     criu_listener: CriuListener,
 ) -> Result<()>
 {
-
+    prnt!("entered serve");
     let mut mem_store = image_store::mem::Store::default();
+    prnt!("passed mem store");
     let _ = drain_shards_into_img_store(&mut mem_store, shard_pipes)?;
-    serve_img(&mut mem_store, ced_listener, gpu_listener, criu_listener)?;
+    prnt!("passed drain shards");
+    serve_img(&mut mem_store, ready_path, ced_listener, gpu_listener, criu_listener)?;
+    prnt!("passed serve_img");
 
     Ok(())
 }

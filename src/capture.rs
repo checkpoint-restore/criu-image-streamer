@@ -310,6 +310,7 @@ pub fn capture(
                             start_time = Instant::now();
                         });
 
+
                         let pipe = gpu.recv_pipe()?;
                         let img_file = ImageFile::new(filename, pipe);
                         poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
@@ -399,5 +400,8 @@ pub fn capture(
         }
     }
     img_serializer.write_image_eof()?;
+    for shard in shards {
+        drop(shard.pipe);
+    }
     Ok(())
 }
