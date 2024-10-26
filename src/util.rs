@@ -61,21 +61,17 @@ macro_rules! prnt {
 /// If it can read the number of bytes requested, it returns Ok(bytes_requested).
 /// Otherwise, it returns Err("EOF error").
 pub fn read_bytes_next<S: Read>(src: &mut S, len: usize) -> Result<Option<BytesMut>> {
-    prnt!(&format!("entered read_bytes_next, len = {}",len));
     let mut buf = Vec::with_capacity(len);
 
     src.take(len as u64).read_to_end(&mut buf).context("Failed to read protobuf")?;
-    prnt!("came back from reading protobuf");
     Ok(match buf.len() {
-        0 => { prnt!("read 0 bytes"); None},
-        l if l == len => { prnt!(&format!("read {} bytes", len)); Some(buf[..].into())},
+        0 => None,
+        l if l == len => Some(buf[..].into()),
         _ => bail!(EOF_ERR_MSG),
     })
 }
 
 pub fn read_bytes_next_breaking(src: &mut UnixStream, len: usize, file_path: &Path) -> Result<Option<BytesMut>> {
-    prnt!("entered read_bytes_next_breaking");
-
     let fd = src.as_raw_fd();
     let mut buf = vec![0u8; len];
 
@@ -103,13 +99,11 @@ pub fn read_bytes_next_breaking(src: &mut UnixStream, len: usize, file_path: &Pa
 /// It returns Ok(obj) for each object to be read, and Ok(None) when EOF is reached.
 /// It returns an error if an object is only partially read, or any deserialization error.
 pub fn pb_read_next<S: Read, T: Message + Default>(src: &mut S) -> Result<Option<(T, usize)>> {
-    prnt!("entered pb_read_next");
     Ok(match read_bytes_next(src, size_of::<u32>())? {
 
-        None => { prnt!("read_bytes_next retuned None"); None },
+        None => None,
         Some(mut size_buf) => {
             let size = size_buf.get_u32_le() as usize;
-            prnt!(&format!("read_bytes_next returned size of {}",&size));
             assert!(size < 10*KB, "Would read a protobuf of size >10KB. Something is wrong");
             let buf = read_bytes_next(src, size)?.ok_or_else(|| anyhow!(EOF_ERR_MSG))?;
             let bytes_read = size_of::<u32>() + size_buf.len() + buf.len();
@@ -119,13 +113,11 @@ pub fn pb_read_next<S: Read, T: Message + Default>(src: &mut S) -> Result<Option
 }
 
 pub fn pb_read_next_breaking<T: Message + Default>(src: &mut UnixStream, ready_path: &Path) -> Result<Option<(T, usize)>> {
-    prnt!("entered pb_read_next_breaking");
     Ok(match read_bytes_next_breaking(src, size_of::<u32>(), ready_path)? {
 
-        None => { prnt!("read_bytes_next_breaking retuned None"); None },
+        None => None,
         Some(mut size_buf) => {
             let size = size_buf.get_u32_le() as usize;
-            prnt!(&format!("read_bytes_next_breaking returned size of {}",&size));
             assert!(size < 10*KB, "Would read a protobuf of size >10KB. Something is wrong");
             let buf = read_bytes_next(src, size)?.ok_or_else(|| anyhow!(EOF_ERR_MSG))?;
             let bytes_read = size_of::<u32>() + size_buf.len() + buf.len();

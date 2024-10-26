@@ -22,7 +22,7 @@ use std::{
 };
 use crate::{
     poller::{Poller, EpollFlags},
-    criu_connection::{CriuListener, CriuConnection},
+    endpoint_connection::{EndpointListener, EndpointConnection},
     unix_pipe::{UnixPipe, UnixPipeImpl},
     util::*,
     image,
@@ -59,12 +59,14 @@ use anyhow::Result;
 /// Note that the following pipe buffers are not actually using memory. The content of the pipe is
 /// just a list of pointers to the application memory page, which is already allocated as CRIU does
 /// a vmsplice(..., SPLICE_F_GIFT) when providing data.
-const CRIU_PIPE_DESIRED_CAPACITY: i32 = 4*MB as i32;
+const CPU_PIPE_DESIRED_CAPACITY: i32 = 4*MB as i32;
+const GPU_PIPE_DESIRED_CAPACITY: i32 = 16*MB as i32;
 
 /// Large buffers size improves performance as it allows us to increase the size of our chunks.
 /// 1MB provides excellent performance.
 #[allow(clippy::identity_op)]
-const SHARD_PIPE_DESIRED_CAPACITY: i32 = 1*MB as i32;
+const CPU_SHARD_PIPE_DESIRED_CAPACITY: i32 = 2*MB as i32;
+const GPU_SHARD_PIPE_DESIRED_CAPACITY: i32 = 16*MB as i32;
 
 /// An `ImageFile` represents a file coming from CRIU.
 /// The complete CRIU image is comprised of many of these files.
@@ -76,9 +78,10 @@ struct ImageFile {
 }
 
 impl ImageFile {
-    pub fn new(filename: String, mut pipe: UnixPipe) -> Self {
+    // typename 0 = criu, 1 = gpu
+    pub fn new(filename: String, mut pipe: UnixPipe, typename: bool) -> Self {
         // Try setting the pipe capacity. Failing is okay, it's just for better performance.
-        let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+        let _ = pipe.set_capacity(if typename { GPU_PIPE_DESIRED_CAPACITY } else { CPU_PIPE_DESIRED_CAPACITY });
         let filename = Rc::from(filename);
         Self { pipe, filename }
     }
@@ -107,6 +110,10 @@ impl Shard {
         let pipe_len = self.pipe.fionread()?;
         self.remaining_space = pipe_capacity - pipe_len;
         Ok(())
+    }
+
+    pub fn set_shard_capacity(&mut self, capacity: i32) {
+        let _ = self.pipe.set_capacity(capacity);
     }
 }
 
@@ -149,6 +156,16 @@ impl<'a> ImageSerializer<'a> {
         }
     }
 
+    fn resize(&mut self, new_capacity: i32) -> Result<()> {
+        self.shards = self.shards.drain()
+            .map(|shard| {
+                shard.set_shard_capacity(new_capacity);
+                Ok(shard)
+            })
+            .collect::<Result<_>>()?;
+        Ok(())
+    }
+
     fn refresh_all_shard_remaining_space(&mut self) -> Result<()> {
         // We wish to mutate all the elements of the BinaryHeap.
         // We tear the existing one down and build a fresh one to reduce insertion cost.
@@ -173,7 +190,7 @@ impl<'a> ImageSerializer<'a> {
     /// better load-balancing.
     fn chunk_max_data_size(&self) -> i32 {
         // If the shard pipe capacity is small, it's sad, but we need to send at least a page
-        max(self.shard_pipe_capacity/4 - **CHUNK_MARKER_KERNEL_SIZE as i32, *PAGE_SIZE as i32)
+        max(self.shard_pipe_capacity/8 - **CHUNK_MARKER_KERNEL_SIZE as i32, *PAGE_SIZE as i32)
     }
 
     fn write_chunk(&mut self, chunk: Chunk) -> Result<()> {
@@ -264,9 +281,9 @@ impl<'a> ImageSerializer<'a> {
 /// The description of arguments can be found in main.rs
 pub fn capture(
     mut shard_pipes: Vec<UnixPipe>,
-    gpu_listener: CriuListener,
-    criu_listener: CriuListener,
-    ced_listener: CriuListener,
+    gpu_listener: EndpointListener,
+    criu_listener: EndpointListener,
+    ced_listener: EndpointListener,
 ) -> Result<()>
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
@@ -274,7 +291,7 @@ pub fn capture(
 
     // The kernel may limit the number of allocated pages for pipes, we must do it before setting
     // the pipe size of external file pipes as shard pipes are more performance sensitive.
-    let shard_pipe_capacity = UnixPipe::increase_capacity(&mut shard_pipes, SHARD_PIPE_DESIRED_CAPACITY)?;
+    let shard_pipe_capacity = UnixPipe::increase_capacity(&mut shard_pipes, GPU_SHARD_PIPE_DESIRED_CAPACITY)?;
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect::<Result<_>>()?;
 
     // We are ready to get to work. Accept cedana-gpu-controller's connection.
@@ -282,11 +299,11 @@ pub fn capture(
 
     // Setup the poller to monitor the server socket and image files' pipes
     enum PollType {
-        Criu(CriuConnection),
+        Endpoint(EndpointConnection),
         ImageFile(ImageFile),
     }
     let mut poller = Poller::new()?;
-    poller.add(gpu.as_raw_fd(), PollType::Criu(gpu), EpollFlags::EPOLLIN)?;
+    poller.add(gpu.as_raw_fd(), PollType::Endpoint(gpu), EpollFlags::EPOLLIN)?;
 
     // Used to compute transfer speed. But the real start is when we call
     // `notify_checkpoint_start_once()`
@@ -303,7 +320,7 @@ pub fn capture(
     let epoll_capacity = 8;
     while let Some((poll_key, poll_obj)) = poller.poll(epoll_capacity)? {
         match poll_obj {
-            PollType::Criu(gpu) => {
+            PollType::Endpoint(gpu) => {
                 match gpu.read_next_file_request()? {
                     Some(filename) => {
                         notify_checkpoint_start_once.call_once(|| {
@@ -312,7 +329,7 @@ pub fn capture(
 
 
                         let pipe = gpu.recv_pipe()?;
-                        let img_file = ImageFile::new(filename, pipe);
+                        let img_file = ImageFile::new(filename, pipe, true);
                         poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
                                    EpollFlags::EPOLLIN)?;
                     }
@@ -333,10 +350,10 @@ pub fn capture(
         }
     }
 
-    // We are ready to get to work. Accept CRIU's connection.
+    let _ = img_serializer.resize(CPU_SHARD_PIPE_DESIRED_CAPACITY);
     let criu = criu_listener.into_accept()?;
 
-    poller.add(criu.as_raw_fd(), PollType::Criu(criu), EpollFlags::EPOLLIN)?;
+    poller.add(criu.as_raw_fd(), PollType::Endpoint(criu), EpollFlags::EPOLLIN)?;
 
     // Process all inputs (ext files, CRIU's connection, and CRIU's files) until they reach EOF.
     // As CRIU requests to write files, we receive new unix pipes that are added to the poller.
@@ -345,11 +362,11 @@ pub fn capture(
     let epoll_capacity = 8;
     while let Some((poll_key, poll_obj)) = poller.poll(epoll_capacity)? {
         match poll_obj {
-            PollType::Criu(criu) => {
+            PollType::Endpoint(criu) => {
                 match criu.read_next_file_request()? {
                     Some(filename) => {
                         let pipe = criu.recv_pipe()?;
-                        let img_file = ImageFile::new(filename, pipe);
+                        let img_file = ImageFile::new(filename, pipe, false);
                         poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
                                    EpollFlags::EPOLLIN)?;
                     }
@@ -371,15 +388,15 @@ pub fn capture(
     }
 
     let ced = ced_listener.into_accept()?;
-    poller.add(ced.as_raw_fd(), PollType::Criu(ced), EpollFlags::EPOLLIN)?;
+    poller.add(ced.as_raw_fd(), PollType::Endpoint(ced), EpollFlags::EPOLLIN)?;
 
     while let Some((poll_key, poll_obj)) = poller.poll(8)? {
         match poll_obj {
-            PollType::Criu(ced) => {
+            PollType::Endpoint(ced) => {
                 match ced.read_next_file_request()? {
                     Some(filename) => {
                         let pipe = ced.recv_pipe()?;
-                        let img_file = ImageFile::new(filename, pipe);
+                        let img_file = ImageFile::new(filename, pipe, false);
                         poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
                                    EpollFlags::EPOLLIN)?;
                     }

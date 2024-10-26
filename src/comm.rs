@@ -1,7 +1,7 @@
 use anyhow::Result;
 use image_streamer::{
     capture::capture,
-    criu_connection::CriuListener,
+    endpoint_connection::EndpointListener,
     extract::serve,
     unix_pipe::UnixPipe,
     util::{self, create_dir_all},
@@ -117,7 +117,7 @@ fn spawn_serve_handles(
             let w_fd = w_fds[i].clone();
             let path = dir_path.clone();
             let (tx, rx) = mpsc::channel();
-            let h = thread::spawn(move || {
+            let handle = thread::spawn(move || {
                 let input_file_path = path.join(&format!("img-{}.lz4", i));
                 let mut input_file = File::open(&input_file_path)
                                         .expect("Unable to open input file path");
@@ -125,12 +125,12 @@ fn spawn_serve_handles(
                 let mut size_buf = [0u8; 8];
                 input_file.read_exact(&mut size_buf).expect("Could not read decompressed size");
                 let bytes_to_read = u64::from_le_bytes(size_buf);
-                prnt!(&format!("bytes to read = {}", bytes_to_read));
                 let mut output_file = unsafe { File::from_raw_fd(w_fd) };
                 let mut decoder = FrameDecoder::new(input_file);
-                let mut buffer = [0; 1048576]; //524288];
+                let mut buffer = [0; 1048576];
                 let mut total_bytes_read = 0;
-                tx.send(format!("thread {} ready to read {} bytes",i.clone(),bytes_to_read)).unwrap();
+                tx.send(format!("thread {} ready to read {} bytes", i.clone(), bytes_to_read))
+                        .unwrap();
                 loop {
                     match decoder.read(&mut buffer) {
                         Ok(0) => {
@@ -140,10 +140,8 @@ fn spawn_serve_handles(
                         }
                         Ok(bytes_read) => {
                             total_bytes_read += bytes_read as u64;
-                            //prnt!(&format!("read {} bytes, total bytes read {}", bytes_read, total_bytes_read));
                             let _ = output_file.write_all(&buffer[..bytes_read])
                                         .expect("could not write all bytes");
-                            //prnt!(&format!("wrote {} bytes", bytes_read));
                         },
                         Err(e) => {
                             if e.kind() != io::ErrorKind::Interrupted {
@@ -154,12 +152,11 @@ fn spawn_serve_handles(
                     }
                 }
             });
-        match rx.recv() {
-            Ok(message) => prnt!(&format!("{} Received: {}",i,  message)),
-            Err(e) => prnt!(&format!("{} Failed to receive message: {}",i, e)),
-        };
-            h
-
+            match rx.recv() {
+                Ok(message) => prnt!(message),
+                Err(e) => prnt!(&format!("Failed to receive message: {}", e)),
+            };
+            handle
         })
         .collect()
 }
@@ -184,31 +181,24 @@ fn do_capture(dir_path: &Path, num_pipes: usize) -> Result<()> {
 
     let _ret = create_dir_all(dir_path);
 
-    let gpu_listener = CriuListener::bind(dir_path, "gpu-capture.sock")?;
-    let criu_listener = CriuListener::bind(dir_path, "streamer-capture.sock")?;
-    let ced_listener = CriuListener::bind(dir_path, "ced-capture.sock")?;
+    let gpu_listener = EndpointListener::bind(dir_path, "gpu-capture.sock")?;
+    let criu_listener = EndpointListener::bind(dir_path, "streamer-capture.sock")?;
+    let ced_listener = EndpointListener::bind(dir_path, "ced-capture.sock")?;
     eprintln!("r");
-    prnt!("all listeners done, ready");
 
     let handle = thread::spawn(move || {
         let _res = capture(shard_pipes, gpu_listener, criu_listener, ced_listener);
-        prnt!("closed w_fds");
     });
-    prnt!("spawned capture, sleeping for 10ms");
     thread::sleep(Duration::from_millis(10));
 
-    prnt!("done sleeping, spawning capture handles");
     let handles = spawn_capture_handles(dir_path.to_path_buf(), num_pipes, r_fds);
-    prnt!("done spawning capture handles, joining handles");
     let _ = handle.join().unwrap();
     join_handles(handles);
-    prnt!("done joining handles, returning");
 
     Ok(())
 }
 
 fn do_serve(dir_path: &Path, num_pipes: usize) -> Result<()> {
-    prnt!("entered do_serve");
     let mut shard_pipes: Vec<UnixPipe> = Vec::new();
     let mut w_fds: Vec<RawFd> = Vec::new();
     for _ in 0..num_pipes {
@@ -221,28 +211,20 @@ fn do_serve(dir_path: &Path, num_pipes: usize) -> Result<()> {
     }
 
     let handles = spawn_serve_handles(dir_path.to_path_buf(), num_pipes, w_fds);
-    let ced_listener = CriuListener::bind(dir_path, "ced-serve.sock")?;
-    let gpu_listener = CriuListener::bind(dir_path, "gpu-serve.sock")?;
-    let criu_listener = CriuListener::bind(dir_path, "streamer-serve.sock")?;
+    let ced_listener = EndpointListener::bind(dir_path, "ced-serve.sock")?;
+    let gpu_listener = EndpointListener::bind(dir_path, "gpu-serve.sock")?;
+    let criu_listener = EndpointListener::bind(dir_path, "streamer-serve.sock")?;
     let ready_path = dir_path.join("ready");
-    prnt!(&format!("ready path = {:?}", ready_path));
     eprintln!("r");
-    prnt!("done listener setup, ready");
 
     let handle = thread::spawn(move || {
         let _res = serve(shard_pipes, &ready_path, ced_listener, gpu_listener, criu_listener);
     });
-    thread::sleep(Duration::from_millis(200));
-    prnt!("spawned serve, slept 50ms");
     join_handles(handles);
-    prnt!("done joining lz4 handles, joining serve handle");
-    //let _ = handle.join().unwrap();
     match handle.join() {
-        Ok(_) => println!("Thread completed successfully"),
-        Err(e) => println!("Thread panicked: {:?}", e),
+        Ok(_) => prnt!("Thread completed successfully"),
+        Err(e) => prnt!(&format!("Thread panicked: {:?}", e)),
     }
-
-    prnt!("done joining handles, returning");
 
     Ok(())
 }
@@ -252,7 +234,6 @@ fn do_main() -> Result<()> {
 
     let dir_path_string = &opts.dir;
     let dir_path = Path::new(&dir_path_string);
-    //let ready_path = Path::new(
     let num_pipes = opts.num_pipes;
 
     match opts.operation {
@@ -264,6 +245,6 @@ fn do_main() -> Result<()> {
 
 fn main() {
     if let Err(e) = do_main() {
-        eprintln!("criu-image-streamer Error: {:#}", e);
+        eprintln!("cedana-image-streamer Error: {:#}", e);
     }
 }
