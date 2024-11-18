@@ -112,6 +112,7 @@ impl Shard {
         Ok(())
     }
 
+    /// May silently fail to set capacity, use with caution
     pub fn set_shard_capacity(&mut self, capacity: i32) {
         let _ = self.pipe.set_capacity(capacity);
     }
