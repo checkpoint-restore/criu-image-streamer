@@ -55,9 +55,15 @@ pub fn timestamp() -> String {
 
 #[macro_export]
 macro_rules! prnt {
-    ($msg:expr) => {
-        println!("\x1b[90m{}\x1b[0m [\x1b[1m{}\x1b[0m] {}", crate::util::timestamp(), file!(), $msg);
-    };
+    ($msg:expr) => {{
+        print!("\x1b[90m{}\x1b[0m [\x1b[1m{}:{}\x1b[0m] ", crate::util::timestamp(), file!(), line!());
+        println!($msg);
+    }};
+    ($msg:expr, $($arg:expr),*) => {{
+        print!("\x1b[90m{}\x1b[0m [\x1b[1m{}:{}\x1b[0m] ", crate::util::timestamp(), file!(), line!());
+        print!($msg, $($arg),*);
+        println!();
+    }};
 }
 
 /// read_bytes_next() attempts to read exactly the number of bytes requested.

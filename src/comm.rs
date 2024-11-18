@@ -12,7 +12,7 @@ use lz4_flex::frame::{FrameDecoder, FrameEncoder};
 use nix::unistd::{close, pipe};
 use std::{
     fs::File,
-    io::{self, BufWriter, Read, Write, Seek, SeekFrom},
+    io::{self, Read, Write},
     os::unix::io::{FromRawFd, RawFd},
     path::{Path, PathBuf},
     thread,
@@ -65,14 +65,9 @@ fn spawn_capture_handles(
             let path = dir_path.clone();
             thread::spawn(move || {
                 let output_file_path = path.join(&format!("img-{}.lz4", i));
-                let mut output_file = File::create(&output_file_path)
+                let output_file = File::create(&output_file_path)
                                     .expect("Unable to create output file path");
-                let mut total_bytes_read: u64 = 0;
-                let size_placeholder = [0u8; 8];
-                output_file.write_all(&size_placeholder)
-                    .expect("Could not write size placeholder");
-                let mut buf_writer = BufWriter::new(output_file);
-                let mut encoder = FrameEncoder::new(&mut buf_writer);
+                let mut encoder = FrameEncoder::new(output_file);
                 let mut input_file = unsafe { File::from_raw_fd(r_fd) };
                 let mut buffer = [0; 1048576];
                 loop {
@@ -80,26 +75,16 @@ fn spawn_capture_handles(
                         Ok(0) => {
                             let _ = close(r_fd);
                             let _ = encoder.finish();
-                            // prepend uncompressed size
-                            let mut output_file = buf_writer.into_inner()
-                                .expect("Could not get file back from buf writer");
-                            output_file.seek(SeekFrom::Start(0))
-                                .expect("Could not seek to start");
-                            output_file.write_all(&total_bytes_read.to_le_bytes())
-                                .expect("Could not write total uncompressed size");
-                            output_file.flush().expect("Failed to flush BufWriter");
-
                             return;
                         }
                         Ok(bytes_read) => {
-                            total_bytes_read += bytes_read as u64;
                             encoder.write_all(&buffer[..bytes_read])
                                             .expect("Unable to write all bytes");
                             encoder.flush().expect("Failed to flush encoder");
                         },
                         Err(e) => {
                             if e.kind() != io::ErrorKind::Interrupted {
-                                prnt!(&format!("err={}",e));
+                                prnt!("err={}",e);
                                 return;
                             }
                         }
@@ -122,33 +107,24 @@ fn spawn_serve_handles(
             let (tx, rx) = mpsc::channel();
             let handle = thread::spawn(move || {
                 let input_file_path = path.join(&format!("img-{}.lz4", i));
-                let mut input_file = File::open(&input_file_path)
+                let input_file = File::open(&input_file_path)
                                         .expect("Unable to open input file path");
-                // get prepended uncompressed size
-                let mut size_buf = [0u8; 8];
-                input_file.read_exact(&mut size_buf).expect("Could not read decompressed size");
-                let bytes_to_read = u64::from_le_bytes(size_buf);
                 let mut output_file = unsafe { File::from_raw_fd(w_fd) };
                 let mut decoder = FrameDecoder::new(input_file);
-                let mut buffer = [0; 1048576];
-                let mut total_bytes_read = 0;
-                tx.send(format!("thread {} ready to read {} bytes", i.clone(), bytes_to_read))
-                        .unwrap();
+                let mut buffer = vec![0; 1048576];
+                tx.send(format!("thread {} ready to read", i.clone())).unwrap();
                 loop {
                     match decoder.read(&mut buffer) {
                         Ok(0) => {
-                            if total_bytes_read == bytes_to_read {
-                                return;
-                            }
+                            return;
                         }
                         Ok(bytes_read) => {
-                            total_bytes_read += bytes_read as u64;
                             let _ = output_file.write_all(&buffer[..bytes_read])
                                         .expect("could not write all bytes");
                         },
                         Err(e) => {
                             if e.kind() != io::ErrorKind::Interrupted {
-                                prnt!(&format!("err={}",e));
+                                prnt!("err={}",e);
                                 return;
                             }
                         }
@@ -156,8 +132,8 @@ fn spawn_serve_handles(
                 }
             });
             match rx.recv() {
-                Ok(message) => prnt!(message),
-                Err(e) => prnt!(&format!("Failed to receive message: {}", e)),
+                Ok(message) => { prnt!("Received message: {}", message); },
+                Err(e) => { prnt!("Failed to receive message: {}", e); },
             };
             handle
         })
@@ -197,7 +173,7 @@ fn do_capture(dir_path: &Path, num_pipes: usize) -> Result<()> {
     let handles = spawn_capture_handles(dir_path.to_path_buf(), num_pipes, r_fds);
     match handle.join() {
         Ok(_) => prnt!("Capture thread completed successfully"),
-        Err(e) => prnt!(&format!("Capture thread panicked: {:?}", e)),
+        Err(e) => prnt!("Capture thread panicked: {:?}", e),
     }
     join_handles(handles);
 
@@ -229,7 +205,7 @@ fn do_serve(dir_path: &Path, num_pipes: usize) -> Result<()> {
     join_handles(handles);
     match handle.join() {
         Ok(_) => prnt!("Serve thread completed successfully"),
-        Err(e) => prnt!(&format!("Serve thread panicked: {:?}", e)),
+        Err(e) => prnt!("Serve thread panicked: {:?}", e),
     }
 
     Ok(())
@@ -255,7 +231,7 @@ fn do_extract(dir_path: &Path, num_pipes: usize) -> Result<()> {
     join_handles(handles);
     match handle.join() {
         Ok(_) => prnt!("Extract thread completed successfully"),
-        Err(e) => prnt!(&format!("Extract thread panicked: {:?}", e)),
+        Err(e) => prnt!("Extract thread panicked: {:?}", e),
     }
     eprintln!("r");
 
