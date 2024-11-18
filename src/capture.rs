@@ -78,7 +78,7 @@ struct ImageFile {
 }
 
 impl ImageFile {
-    // typename 0 = criu, 1 = gpu
+    /// typename: false = criu, true = gpu
     pub fn new(filename: String, mut pipe: UnixPipe, typename: bool) -> Self {
         // Try setting the pipe capacity. Failing is okay, it's just for better performance.
         let _ = pipe.set_capacity(if typename { GPU_PIPE_DESIRED_CAPACITY } else { CPU_PIPE_DESIRED_CAPACITY });
