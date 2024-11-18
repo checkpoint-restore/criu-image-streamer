@@ -254,8 +254,8 @@ fn do_extract(dir_path: &Path, num_pipes: usize) -> Result<()> {
     });
     join_handles(handles);
     match handle.join() {
-        Ok(_) => prnt!("Thread completed successfully"),
-        Err(e) => prnt!(&format!("Thread panicked: {:?}", e)),
+        Ok(_) => prnt!("Extract thread completed successfully"),
+        Err(e) => prnt!(&format!("Extract thread panicked: {:?}", e)),
     }
     eprintln!("r");
 
