@@ -192,7 +192,10 @@ fn do_capture(dir_path: &Path, num_pipes: usize) -> Result<()> {
     thread::sleep(Duration::from_millis(10));
 
     let handles = spawn_capture_handles(dir_path.to_path_buf(), num_pipes, r_fds);
-    let _ = handle.join().unwrap();
+    match handle.join() {
+        Ok(_) => prnt!("Capture thread completed successfully"),
+        Err(e) => prnt!(&format!("Capture thread panicked: {:?}", e)),
+    }
     join_handles(handles);
 
     Ok(())
@@ -222,8 +225,8 @@ fn do_serve(dir_path: &Path, num_pipes: usize) -> Result<()> {
     });
     join_handles(handles);
     match handle.join() {
-        Ok(_) => prnt!("Thread completed successfully"),
-        Err(e) => prnt!(&format!("Thread panicked: {:?}", e)),
+        Ok(_) => prnt!("Serve thread completed successfully"),
+        Err(e) => prnt!(&format!("Serve thread panicked: {:?}", e)),
     }
 
     Ok(())
