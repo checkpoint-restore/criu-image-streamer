@@ -59,9 +59,8 @@ impl Store {
         let key = self.files.keys()
             .find(|key| key.starts_with(filename_prefix))
             .cloned();
-
-        // if key found, remove entry and return file + filename
-        key.and_then(|k| self.files.remove(&k).map(|file| (k, file)))
+        // if key found, remove entry and return key + file
+        key.and_then(|ref k| self.files.remove_entry(k))
     }
 }
 

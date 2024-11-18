@@ -68,6 +68,9 @@ const GPU_PIPE_DESIRED_CAPACITY: i32 = 16*MB as i32;
 const CPU_SHARD_PIPE_DESIRED_CAPACITY: i32 = 2*MB as i32;
 const GPU_SHARD_PIPE_DESIRED_CAPACITY: i32 = 16*MB as i32;
 
+/// Storing more shards per pipe reduces stalling.
+const SHARDS_PER_PIPE: i32 = 8;
+
 /// An `ImageFile` represents a file coming from CRIU.
 /// The complete CRIU image is comprised of many of these files.
 struct ImageFile {
@@ -78,7 +81,7 @@ struct ImageFile {
 }
 
 impl ImageFile {
-    // typename 0 = criu, 1 = gpu
+    /// typename: false = criu, true = gpu
     pub fn new(filename: String, mut pipe: UnixPipe, typename: bool) -> Self {
         // Try setting the pipe capacity. Failing is okay, it's just for better performance.
         let _ = pipe.set_capacity(if typename { GPU_PIPE_DESIRED_CAPACITY } else { CPU_PIPE_DESIRED_CAPACITY });
@@ -112,6 +115,7 @@ impl Shard {
         Ok(())
     }
 
+    /// May silently fail to set capacity, use with caution
     pub fn set_shard_capacity(&mut self, capacity: i32) {
         let _ = self.pipe.set_capacity(capacity);
     }
@@ -190,7 +194,8 @@ impl<'a> ImageSerializer<'a> {
     /// better load-balancing.
     fn chunk_max_data_size(&self) -> i32 {
         // If the shard pipe capacity is small, it's sad, but we need to send at least a page
-        max(self.shard_pipe_capacity/8 - **CHUNK_MARKER_KERNEL_SIZE as i32, *PAGE_SIZE as i32)
+        max(self.shard_pipe_capacity/SHARDS_PER_PIPE - **CHUNK_MARKER_KERNEL_SIZE as i32,
+            *PAGE_SIZE as i32)
     }
 
     fn write_chunk(&mut self, chunk: Chunk) -> Result<()> {
@@ -317,8 +322,8 @@ pub fn capture(
     // As CRIU requests to write files, we receive new unix pipes that are added to the poller.
     // We use an epoll_capacity of 8. This doesn't really matter as the number of concurrent
     // connection is typically at most 2.
-    let epoll_capacity = 8;
-    while let Some((poll_key, poll_obj)) = poller.poll(epoll_capacity)? {
+    const EPOLL_CAPACITY: usize = 8;
+    while let Some((poll_key, poll_obj)) = poller.poll(EPOLL_CAPACITY)? {
         match poll_obj {
             PollType::Endpoint(gpu) => {
                 match gpu.read_next_file_request()? {
@@ -355,12 +360,7 @@ pub fn capture(
 
     poller.add(criu.as_raw_fd(), PollType::Endpoint(criu), EpollFlags::EPOLLIN)?;
 
-    // Process all inputs (ext files, CRIU's connection, and CRIU's files) until they reach EOF.
-    // As CRIU requests to write files, we receive new unix pipes that are added to the poller.
-    // We use an epoll_capacity of 8. This doesn't really matter as the number of concurrent
-    // connection is typically at most 2.
-    let epoll_capacity = 8;
-    while let Some((poll_key, poll_obj)) = poller.poll(epoll_capacity)? {
+    while let Some((poll_key, poll_obj)) = poller.poll(EPOLL_CAPACITY)? {
         match poll_obj {
             PollType::Endpoint(criu) => {
                 match criu.read_next_file_request()? {
@@ -390,7 +390,7 @@ pub fn capture(
     let ced = ced_listener.into_accept()?;
     poller.add(ced.as_raw_fd(), PollType::Endpoint(ced), EpollFlags::EPOLLIN)?;
 
-    while let Some((poll_key, poll_obj)) = poller.poll(8)? {
+    while let Some((poll_key, poll_obj)) = poller.poll(EPOLL_CAPACITY)? {
         match poll_obj {
             PollType::Endpoint(ced) => {
                 match ced.read_next_file_request()? {
@@ -417,8 +417,5 @@ pub fn capture(
         }
     }
     img_serializer.write_image_eof()?;
-    for shard in shards {
-        drop(shard.pipe);
-    }
     Ok(())
 }
