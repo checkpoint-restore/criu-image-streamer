@@ -53,6 +53,15 @@ impl Store {
     pub fn remove(&mut self, filename: &str) -> Option<File> {
         self.files.remove(filename)
     }
+
+    pub fn remove_by_prefix(&mut self, filename_prefix: &str) -> Option<(Box<str>, File)> {
+        // find key with prefix
+        let key = self.files.keys()
+            .find(|key| key.starts_with(filename_prefix))
+            .cloned();
+        // if key found, remove entry and return key + file
+        key.and_then(|ref k| self.files.remove_entry(k))
+    }
 }
 
 impl ImageStore for Store {

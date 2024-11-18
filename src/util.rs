@@ -12,6 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
+use chrono::{DateTime, Local};
 use prost::Message;
 use std::{
     mem::size_of,
@@ -19,9 +20,11 @@ use std::{
     os::unix::io::{RawFd, AsRawFd},
     io::{Read, Write},
     path::Path,
+    time::SystemTime,
     fs,
 };
 use nix::{
+    poll::{poll, PollFd, PollFlags},
     sys::socket::{ControlMessageOwned, MsgFlags, recvmsg},
     sys::uio::IoVec,
     unistd::{sysconf, SysconfVar},
@@ -40,12 +43,26 @@ lazy_static::lazy_static! {
         .expect("Failed to determine PAGE_SIZE") as usize;
 }
 
+pub fn timestamp() -> String {
+    let system_time = SystemTime::now();
+    let datetime: DateTime<Local> = system_time.into();
+    datetime.format("%H:%M:%S%.6f").to_string()
+}
+
+#[macro_export]
+macro_rules! prnt {
+    ($msg:expr) => {
+        println!("\x1b[90m{}\x1b[0m [\x1b[1m{}\x1b[0m] {}", crate::util::timestamp(), file!(), $msg);
+    };
+}
+
 /// read_bytes_next() attempts to read exactly the number of bytes requested.
 /// If we are at EOF, it returns Ok(None).
 /// If it can read the number of bytes requested, it returns Ok(bytes_requested).
 /// Otherwise, it returns Err("EOF error").
 pub fn read_bytes_next<S: Read>(src: &mut S, len: usize) -> Result<Option<BytesMut>> {
     let mut buf = Vec::with_capacity(len);
+
     src.take(len as u64).read_to_end(&mut buf).context("Failed to read protobuf")?;
     Ok(match buf.len() {
         0 => None,
@@ -54,11 +71,50 @@ pub fn read_bytes_next<S: Read>(src: &mut S, len: usize) -> Result<Option<BytesM
     })
 }
 
+pub fn read_bytes_next_breaking(src: &mut UnixStream, len: usize, file_path: &Path) -> Result<Option<BytesMut>> {
+    let fd = src.as_raw_fd();
+    let mut buf = vec![0u8; len];
+
+    loop {
+        let mut poll_fd = [PollFd::new(fd, PollFlags::POLLIN)];
+        let poll_result = poll(&mut poll_fd, 10)?;  // No timeout (-1 means block indefinitely)
+        if poll_result > 0 {
+            if let Some(poll_fd) = poll_fd.get(0) {
+                if poll_fd.revents().unwrap().contains(PollFlags::POLLIN) {
+                    let read_bytes = src.read(&mut buf).context("Failed to read socket")?;
+                    if read_bytes > 0 {
+                        return Ok(Some(buf[..read_bytes].into()));
+                    }
+                }
+            }
+        }
+
+        if file_path.exists() {
+            return Ok(None);
+        }
+    }
+}
+
 /// pb_read_next() is useful to iterate through a stream of protobuf objects.
 /// It returns Ok(obj) for each object to be read, and Ok(None) when EOF is reached.
 /// It returns an error if an object is only partially read, or any deserialization error.
 pub fn pb_read_next<S: Read, T: Message + Default>(src: &mut S) -> Result<Option<(T, usize)>> {
     Ok(match read_bytes_next(src, size_of::<u32>())? {
+
+        None => None,
+        Some(mut size_buf) => {
+            let size = size_buf.get_u32_le() as usize;
+            assert!(size < 10*KB, "Would read a protobuf of size >10KB. Something is wrong");
+            let buf = read_bytes_next(src, size)?.ok_or_else(|| anyhow!(EOF_ERR_MSG))?;
+            let bytes_read = size_of::<u32>() + size_buf.len() + buf.len();
+            Some((T::decode(buf)?, bytes_read))
+        }
+    })
+}
+
+pub fn pb_read_next_breaking<T: Message + Default>(src: &mut UnixStream, ready_path: &Path) -> Result<Option<(T, usize)>> {
+    Ok(match read_bytes_next_breaking(src, size_of::<u32>(), ready_path)? {
+
         None => None,
         Some(mut size_buf) => {
             let size = size_buf.get_u32_le() as usize;
