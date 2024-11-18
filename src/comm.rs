@@ -2,7 +2,7 @@ use anyhow::Result;
 use image_streamer::{
     capture::capture,
     endpoint_connection::EndpointListener,
-    extract::serve,
+    extract::{extract, serve},
     unix_pipe::UnixPipe,
     util::{self, create_dir_all},
     prnt,
@@ -44,11 +44,14 @@ struct Opts {
 
 #[derive(StructOpt, PartialEq, Debug)]
 enum Operation {
-    /// Capture a CRIU image
+    /// Capture a cedana image
     Capture,
 
-    /// Serve a captured CRIU image to CRIU
+    /// Serve a captured cedana image to cedana, criu, cedana-image-streamer
     Serve,
+
+    /// Extract a captured cedana image to the specified dir
+    Extract,
 }
 
 fn spawn_capture_handles(
@@ -232,6 +235,33 @@ fn do_serve(dir_path: &Path, num_pipes: usize) -> Result<()> {
     Ok(())
 }
 
+fn do_extract(dir_path: &Path, num_pipes: usize) -> Result<()> {
+    let mut shard_pipes: Vec<UnixPipe> = Vec::new();
+    let mut w_fds: Vec<RawFd> = Vec::new();
+    for _ in 0..num_pipes {
+        let (r_fd, w_fd): (RawFd, RawFd) = pipe()?;
+        let dup_fd = unsafe { dup(r_fd) };
+        close(r_fd).expect("Failed to close original write file descriptor");
+
+        w_fds.push(w_fd);
+        shard_pipes.push(unsafe { File::from_raw_fd(dup_fd) });
+    }
+
+    let dir_cp = dir_path.to_path_buf();
+    let handles = spawn_serve_handles(dir_cp.clone(), num_pipes, w_fds);
+    let handle = thread::spawn(move || {
+        let _res = extract(&dir_cp, shard_pipes);
+    });
+    join_handles(handles);
+    match handle.join() {
+        Ok(_) => prnt!("Extract thread completed successfully"),
+        Err(e) => prnt!(&format!("Extract thread panicked: {:?}", e)),
+    }
+    eprintln!("r");
+
+    Ok(())
+}
+
 fn do_main() -> Result<()> {
     let opts: Opts = Opts::from_args();
 
@@ -242,6 +272,7 @@ fn do_main() -> Result<()> {
     match opts.operation {
         Operation::Capture => do_capture(dir_path, num_pipes),
         Operation::Serve => do_serve(dir_path, num_pipes),
+        Operation::Extract => do_extract(dir_path, num_pipes),
     }?;
     Ok(())
 }
