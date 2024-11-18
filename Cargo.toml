@@ -9,6 +9,7 @@ license = "Apache-2.0"
 [dependencies]
 structopt = { version = "0.3", default-features = false }
 anyhow = "1.0"
+chrono = "0.4"
 slab = "0.4"
 libc = "0.2"
 prost = "0.11"
@@ -22,7 +23,6 @@ lz4_flex = "0.11.3"
 
 [build-dependencies]
 prost-build = "0.11" # to generate protobuf wrappers
-tonic-build = { version = "^0.9", features = ["prost"] }
 
 [dev-dependencies]
 procinfo = "0.4" # to measure memory usage
