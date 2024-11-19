@@ -7,6 +7,7 @@ on:
 
 jobs:
   build-and-release:
+    name: Build and release
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
@@ -20,6 +21,12 @@ jobs:
     - name: Build cedana-image-streamer
       run: |
         cargo build --release --bin cedana-image-streamer
+    - name: Persist cedana-image-streamer
+      id: persist-cedana-image-streamer
+      uses: actions/upload-artifact@v4
+      with:
+        name: cedana-image-streamer
+        path: target/release/cedana-image-streamer
     - name: Create GitHub Release
       id: create_release
       uses: actions/create-release@v1
