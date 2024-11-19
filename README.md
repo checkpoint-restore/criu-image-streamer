@@ -19,13 +19,13 @@ Place it in your PATH:
 ```
 sudo cp target/release/cedana-image-streamer /usr/bin
 ```
-To checkpoint with streaming:
+To checkpoint with streaming (specify number of pipes `n`):
 ```
-cedana dump job workload -d /dumpdir --stream
+cedana dump job workload -d /dumpdir --stream n
 ```
-To restore with streaming:
+To restore with streaming (same `n`):
 ```
-cedana restore job workload --stream
+cedana restore job workload --stream n
 ```
 
 License
