@@ -8,9 +8,6 @@ on:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: 'write'
-      releases: 'write'
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -41,4 +38,6 @@ jobs:
         asset_path: target/release/cedana-image-streamer
         asset_name: cedana-image-streamer
         asset_content_type: application/octet-stream
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
