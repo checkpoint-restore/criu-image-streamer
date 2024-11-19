@@ -13,8 +13,7 @@ jobs:
       uses: actions/checkout@v4
     - name: Install dependencies
       run: |
-        apt-get update
-        apt-get install -y sudo
+        sudo apt-get update
         sudo apt -y install protobuf-compiler
         curl https://sh.rustup.rs -sSf | sh -s -- -y
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
