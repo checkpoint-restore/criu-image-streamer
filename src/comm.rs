@@ -69,7 +69,7 @@ fn spawn_capture_handles(
                                     .expect("Unable to create output file path");
                 let mut encoder = FrameEncoder::new(output_file);
                 let mut input_file = unsafe { File::from_raw_fd(r_fd) };
-                let mut buffer = [0; 1048576];
+                let mut buffer = vec![0; 1048576];
                 loop {
                     match input_file.read(&mut buffer) {
                         Ok(0) => {
@@ -196,11 +196,10 @@ fn do_serve(dir_path: &Path, num_pipes: usize) -> Result<()> {
     let ced_listener = EndpointListener::bind(dir_path, "ced-serve.sock")?;
     let gpu_listener = EndpointListener::bind(dir_path, "gpu-serve.sock")?;
     let criu_listener = EndpointListener::bind(dir_path, "streamer-serve.sock")?;
-    let ready_path = dir_path.join("ready");
     eprintln!("r");
 
     let handle = thread::spawn(move || {
-        let _res = serve(shard_pipes, &ready_path, ced_listener, gpu_listener, criu_listener);
+        let _res = serve(shard_pipes, ced_listener, gpu_listener, criu_listener);
     });
     join_handles(handles);
     match handle.join() {
