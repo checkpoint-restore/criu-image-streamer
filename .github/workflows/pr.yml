@@ -1,0 +1,132 @@
+name: PR
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - master
+jobs:
+  build:
+    name: Build
+    runs-on: ubicloud-standard-8
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt -qq update
+          sudo apt -qq install protobuf-compiler
+          # Install rust
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Build cedana-image-streamer
+        run: cargo build -q --release --bin cedana-image-streamer
+      - name: Upload cedana-image-streamer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cedana-image-streamer
+          path: target/release/cedana-image-streamer
+      - name: Build cedana daemon
+        env:
+          BRANCH: ${{ vars.CEDANA_DAEMON_BRANCH }}
+        run: |
+          # Install dependencies
+          sudo apt -qq update
+          sudo apt -qq install libgpgme-dev libseccomp-dev libbtrfs-dev pkg-config
+          wget -q https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+          sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
+          echo "/usr/local/go/bin" >> $GITHUB_PATH
+          go version
+          # Build cedana daemon
+          git clone https://github.com/cedana/cedana.git
+          pushd cedana
+          git checkout $BRANCH
+          go build
+          popd
+      - name: Upload cedana daemon artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cedana
+          path: cedana/cedana
+
+  regression-test:
+    name: Regression tests
+    runs-on: ubicloud-standard-8
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Download cedana-image-streamer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cedana-image-streamer
+      - name: Download cedana artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cedana
+      - name: Install cedana-image-streamer
+        run: |
+          chmod +x cedana-image-streamer
+          sudo cp cedana-image-streamer /usr/bin/
+          echo "installed $(whereis cedana-image-streamer)"
+      - name: Install bats
+        run: |
+          git clone https://github.com/bats-core/bats-core.git
+          pushd bats-core
+          sudo -E ./install.sh /usr/local
+          popd && rm -rf bats-core
+      - name: Install criu
+        env:
+          CLOUDSMITH_ENTITLEMENT_TOKEN_CRIU: ${{ secrets.CLOUDSMITH_ENTITLEMENT_TOKEN_CRIU }}
+        run: |
+          TAG=latest
+          sudo apt -qq install libnet1 libprotobuf-c1
+          curl -1sLf -O https://dl.cloudsmith.io/$CLOUDSMITH_ENTITLEMENT_TOKEN_CRIU/cedana/criu/raw/versions/$TAG/criu
+          chmod +x criu
+          sudo cp criu /usr/local/sbin/
+          echo "installed $(whereis criu)"
+          printf "> criu --version\n$(criu --version)"
+      - name: Install cedana daemon
+        run: |
+          # Install dependencies
+          sudo apt -qq update
+          sudo apt -qq install libgpgme-dev libseccomp-dev libbtrfs-dev pkg-config
+          wget -q https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+          sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
+          echo "/usr/local/go/bin" >> $GITHUB_PATH
+          go version
+          # Install cedana daemon
+          chmod +x cedana
+          sudo cp cedana /usr/bin/
+          export CEDANA_CLI_WAIT_FOR_READY=true
+          echo "installed $(whereis cedana)"
+          #- name: Setup tmate session
+          #  uses: mxschmitt/action-tmate@v3
+      - name: Change kernel settings
+        run: |
+          echo 0 | sudo tee /proc/sys/fs/pipe-user-pages-soft > /dev/null
+          cat /proc/sys/fs/pipe-user-pages-soft
+          echo 0 | sudo tee /proc/sys/fs/pipe-user-pages-hard > /dev/null
+          cat /proc/sys/fs/pipe-user-pages-hard
+          echo $((4*1024*1024)) | sudo tee /proc/sys/fs/pipe-max-size > /dev/null
+          cat /proc/sys/fs/pipe-max-size
+      - name: Run regression tests
+        env:
+          CEDANA_URL: ${{ secrets.CEDANA_URL }}
+          CEDANA_API_KEY: ${{ secrets.CEDANA_API_KEY }}
+        run: sudo -E make -C scripts/ci regression
+      - name: Upload cedana-daemon log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cedana-daemon.log
+          path: /var/log/cedana-daemon.log
+      - name: Upload cedana-output log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cedana-output.log
+          path: /var/log/cedana-output.log
