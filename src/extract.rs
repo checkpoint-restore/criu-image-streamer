@@ -299,7 +299,7 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
 fn serve_img(
     mem_store: &mut image_store::mem::Store,
     ced_listener: EndpointListener,
-    gpu_listener: EndpointListener,
+    gpu_listener: Option<EndpointListener>,
     criu_listener: EndpointListener,
 ) -> Result<()>
 {
@@ -333,31 +333,36 @@ fn serve_img(
     }
     prnt!("done with cedana, moving to gpu");
 
-    let mut gpu = gpu_listener.into_accept()?;
-    prnt!("connected to gpu");
-    while let Some(filename_prefix) = gpu.read_next_file_request()? {
-        match mem_store.remove_by_prefix(&filename_prefix) {
-            Some((filename, memory_file)) => {
-                prnt!("gpu filename: {}",&filename);
-                filenames_of_sent_files.insert(filename.to_string().clone());
-                gpu.send_file_reply(true)?;
-                let mut pipe = gpu.recv_pipe()?;
-                // Try setting the pipe capacity. Failing is okay.
-                let _ = pipe.set_capacity(GPU_PIPE_DESIRED_CAPACITY);
-                memory_file.drain(&mut pipe)
-                   .with_context(|| format!("while serving file_prefix {}", &filename_prefix))?;
+    match gpu_listener {
+        Some(g) => {
+            let mut gpu = g.into_accept()?;
+            prnt!("connected to gpu");
+            while let Some(filename_prefix) = gpu.read_next_file_request()? {
+                match mem_store.remove_by_prefix(&filename_prefix) {
+                    Some((filename, memory_file)) => {
+                        prnt!("gpu filename: {}",&filename);
+                        filenames_of_sent_files.insert(filename.to_string().clone());
+                        gpu.send_file_reply(true)?;
+                        let mut pipe = gpu.recv_pipe()?;
+                        // Try setting the pipe capacity. Failing is okay.
+                        let _ = pipe.set_capacity(GPU_PIPE_DESIRED_CAPACITY);
+                        memory_file.drain(&mut pipe)
+                            .with_context(|| format!("while serving file_prefix {}", &filename_prefix))?;
+                    }
+                    None => {
+                        // If we keep the image file in our process, CRIU will also
+                        // have a copy of the image file. This uses x2 the memory for an image
+                        // file. For large files like memory pages, we could very much go over
+                        // the machine memory capacity.
+                        ensure!(!filenames_of_sent_files.contains(&filename_prefix),
+                            "cedana-gpu-controller is requesting the image file prefix `{}` multiple times. \
+                            This is not allowed to keep the memory usage low", &filename_prefix);
+                        gpu.send_file_reply(false)?;
+                    }
+                }
             }
-            None => {
-                // If we keep the image file in our process, CRIU will also
-                // have a copy of the image file. This uses x2 the memory for an image
-                // file. For large files like memory pages, we could very much go over
-                // the machine memory capacity.
-                ensure!(!filenames_of_sent_files.contains(&filename_prefix),
-                    "cedana-gpu-controller is requesting the image file prefix `{}` multiple times. \
-                    This is not allowed to keep the memory usage low", &filename_prefix);
-                gpu.send_file_reply(false)?;
-            }
-        }
+        },
+        None => { prnt!("not using gpu"); },
     }
 
     let mut criu = criu_listener.into_accept()?;
@@ -411,7 +416,7 @@ fn drain_shards_into_img_store<Store: ImageStore>(
 pub fn serve(
     shard_pipes: Vec<UnixPipe>,
     ced_listener: EndpointListener,
-    gpu_listener: EndpointListener,
+    gpu_listener: Option<EndpointListener>,
     criu_listener: EndpointListener,
 ) -> Result<()>
 {
@@ -427,8 +432,6 @@ pub fn extract(images_dir: &Path,
     shard_pipes: Vec<UnixPipe>,
 ) -> Result<()>
 {
-    create_dir_all(images_dir)?;
-
     // extract on disk
     let mut file_store = image_store::fs::Store::new(images_dir);
     let _ = drain_shards_into_img_store(&mut file_store, shard_pipes)?;
