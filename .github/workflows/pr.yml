@@ -115,6 +115,9 @@ jobs:
           cat /proc/sys/fs/pipe-max-size
       - name: Run regression tests
         env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           CEDANA_URL: ${{ secrets.CEDANA_URL }}
           CEDANA_API_KEY: ${{ secrets.CEDANA_API_KEY }}
         run: sudo -E make -C scripts/ci regression

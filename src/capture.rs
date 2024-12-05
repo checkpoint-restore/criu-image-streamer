@@ -342,6 +342,7 @@ pub fn capture(
                                     start_time = Instant::now();
                                 });
 
+                                prnt!("gpu filename: {:?}", &filename);
                                 let pipe = gpu.recv_pipe()?;
                                 let img_file = ImageFile::new(filename, pipe, true);
                                 poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
@@ -363,6 +364,7 @@ pub fn capture(
                     }
                 }
             }
+            prnt!("finished listening to gpu");
             let _ = img_serializer.resize(CPU_SHARD_PIPE_DESIRED_CAPACITY);
         },
         None => { prnt!("not using gpu"); },
@@ -382,6 +384,7 @@ pub fn capture(
                             start_time = Instant::now();
                         });
 
+                        prnt!("criu filename: {:?}", &filename);
                         let pipe = criu.recv_pipe()?;
                         let img_file = ImageFile::new(filename, pipe, false);
                         poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
@@ -403,6 +406,7 @@ pub fn capture(
             }
         }
     }
+    prnt!("finished listening to criu");
 
     let ced = ced_listener.into_accept()?;
     prnt!("connected to daemon");
@@ -413,6 +417,7 @@ pub fn capture(
             PollType::Endpoint(ced) => {
                 match ced.read_next_file_request()? {
                     Some(filename) => {
+                        prnt!("daemon filename: {:?}", &filename);
                         let pipe = ced.recv_pipe()?;
                         let img_file = ImageFile::new(filename, pipe, false);
                         poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
@@ -434,6 +439,7 @@ pub fn capture(
             }
         }
     }
+    prnt!("finished listening to daemon");
     img_serializer.write_image_eof()?;
     Ok(())
 }

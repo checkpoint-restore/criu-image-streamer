@@ -237,6 +237,7 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
     }
 
     fn get_next_readable_shard(&mut self) -> Result<Option<&'a mut Shard>> {
+        // heavily investigate here TODO
         // If we just return `self.shard.pop()`, we may deadlock if shard pipes are not independent
         // from each other.
         // This scenario only happens when the capture shards are directly connected to the extract
@@ -249,11 +250,12 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
         // We use poll() instead of epoll() because we need to ignore the shards that are in the
         // list of pending markers, and we are not doing async reads to do edge triggers.
         if self.readable_shards.is_empty() {
-            if self.shards.len() <= 1 {
+            if self.shards.len() <= 0 {
                 // If we have no shard to read from, we'll return None.
                 // If we have a single shard to read from, there no need to block in poll()
                 // We return immediately with that shard, even if it is not readable yet as it
                 // won't introduce a deadlock with the capture side.
+                prnt!("self.shards.len ({}) <= 1, returning Ok(self.shards.pop())", self.shards.len());
                 return Ok(self.shards.pop());
             }
 
@@ -288,6 +290,7 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
     /// Returns successfully when the image has been fully deserialized. This is our main loop.
     pub fn drain_all(&mut self) -> Result<()> {
         while let Some(shard) = self.get_next_readable_shard()? {
+            // prnt!("draining a shard");
             self.drain_shard(shard)?;
         }
         ensure!(self.image_eof, "No shards to read from");
@@ -305,12 +308,12 @@ fn serve_img(
 {
     let mut ced = ced_listener.into_accept()?;
 
-    prnt!("connected to cedana");
+    prnt!("connected to daemon");
     let mut filenames_of_sent_files = HashSet::new();
     if let Some(filename) = ced.read_next_file_request()? {
         match mem_store.remove(&filename) {
             Some(memory_file) => {
-                prnt!("cedana filename: {}",&filename);
+                prnt!("daemon filename: {}", &filename);
                 filenames_of_sent_files.insert(filename.clone());
                 ced.send_file_reply(true)?; // true means that the file exists.
                 let mut pipe = ced.recv_pipe()?;
@@ -325,13 +328,13 @@ fn serve_img(
                 // file. For large files like memory pages, we could very much go over
                 // the machine memory capacity.
                 ensure!(!filenames_of_sent_files.contains(&filename),
-                    "Cedana is requesting the image file `{}` multiple times. \
+                    "Daemon is requesting the image file `{}` multiple times. \
                     This is not allowed to keep the memory usage low", &filename);
                 ced.send_file_reply(false)?;
             }
         }
     }
-    prnt!("done with cedana, moving to gpu");
+    prnt!("finished listening to daemon");
 
     match gpu_listener {
         Some(g) => {
@@ -340,7 +343,7 @@ fn serve_img(
             while let Some(filename_prefix) = gpu.read_next_file_request()? {
                 match mem_store.remove_by_prefix(&filename_prefix) {
                     Some((filename, memory_file)) => {
-                        prnt!("gpu filename: {}",&filename);
+                        prnt!("gpu filename: {}", &filename);
                         filenames_of_sent_files.insert(filename.to_string().clone());
                         gpu.send_file_reply(true)?;
                         let mut pipe = gpu.recv_pipe()?;
@@ -361,6 +364,7 @@ fn serve_img(
                     }
                 }
             }
+            prnt!("finished listening to gpu");
         },
         None => { prnt!("not using gpu"); },
     }
@@ -373,7 +377,7 @@ fn serve_img(
     while let Some(filename) = criu.read_next_file_request()? {
         match mem_store.remove(&filename) {
             Some(memory_file) => {
-                prnt!("criu filename: {}",&filename);
+                prnt!("criu filename: {}", &filename);
                 filenames_of_sent_files.insert(filename.clone());
                 criu.send_file_reply(true)?; // true means that the file exists.
                 let mut pipe = criu.recv_pipe()?;
@@ -394,6 +398,7 @@ fn serve_img(
             }
         }
     }
+    prnt!("finished listening to criu");
 
     Ok(())
 }

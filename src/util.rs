@@ -87,7 +87,7 @@ pub fn read_bytes_next_breaking(src: &mut UnixStream, len: usize, file_path: &Pa
 
     loop {
         let mut poll_fd = [PollFd::new(fd, PollFlags::POLLIN)];
-        let poll_result = poll(&mut poll_fd, 10)?;  // No timeout (-1 means block indefinitely)
+        let poll_result = poll(&mut poll_fd, 10)?;
         if poll_result > 0 {
             if let Some(poll_fd) = poll_fd.get(0) {
                 if poll_fd.revents().unwrap().contains(PollFlags::POLLIN) {
@@ -100,6 +100,7 @@ pub fn read_bytes_next_breaking(src: &mut UnixStream, len: usize, file_path: &Pa
         }
 
         if file_path.exists() {
+            prnt!("ready path exists, breaking from read_bytes_next_breaking");
             return Ok(None);
         }
     }
