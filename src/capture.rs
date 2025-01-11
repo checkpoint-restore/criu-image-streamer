@@ -19,6 +19,7 @@
 use std::{
     collections::{BinaryHeap},
     os::unix::io::AsRawFd,
+    path::PathBuf,
     time::Instant,
     cmp::{min, max},
     sync::Once,
@@ -291,9 +292,8 @@ impl<'a> ImageSerializer<'a> {
 /// The description of arguments can be found in main.rs
 pub fn capture(
     mut shard_pipes: Vec<UnixPipe>,
-    gpu_listener: Option<EndpointListener>,
-    criu_listener: EndpointListener,
-    ced_listener: EndpointListener,
+    dir_path: PathBuf,
+    use_gpu: bool,
 ) -> Result<()>
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
@@ -301,7 +301,7 @@ pub fn capture(
 
     // The kernel may limit the number of allocated pages for pipes, we must do it before setting
     // the pipe size of external file pipes as shard pipes are more performance sensitive.
-    let initial_capacity = if gpu_listener.is_some() { GPU_SHARD_PIPE_DESIRED_CAPACITY } else { CPU_SHARD_PIPE_DESIRED_CAPACITY };
+    let initial_capacity = if use_gpu { GPU_SHARD_PIPE_DESIRED_CAPACITY } else { CPU_SHARD_PIPE_DESIRED_CAPACITY };
     let shard_pipe_capacity = UnixPipe::increase_capacity(&mut shard_pipes, initial_capacity)?;
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect::<Result<_>>()?;
 
@@ -322,10 +322,12 @@ pub fn capture(
     let mut img_serializer = ImageSerializer::new(&mut shards, shard_pipe_capacity);
 
     // We are ready to get to work.
-    match gpu_listener {
-        Some(g) => {
+    match use_gpu {
+        true => {
             // Accept cedana-gpu-controller's connection.
-            let gpu = g.into_accept()?;
+            let gpu_listener = EndpointListener::bind(&dir_path, "gpu-capture.sock")?;
+            eprintln!("r");
+            let gpu = gpu_listener.into_accept()?;
             prnt!("connected to gpu");
             poller.add(gpu.as_raw_fd(), PollType::Endpoint(gpu), EpollFlags::EPOLLIN)?;
 
@@ -367,9 +369,11 @@ pub fn capture(
             prnt!("finished listening to gpu");
             let _ = img_serializer.resize(CPU_SHARD_PIPE_DESIRED_CAPACITY);
         },
-        None => { prnt!("not using gpu"); },
+        false => { prnt!("not using gpu"); },
     }
 
+    let criu_listener = EndpointListener::bind(&dir_path, "streamer-capture.sock")?;
+    eprintln!("r");
     let criu = criu_listener.into_accept()?;
     prnt!("connected to criu");
 
@@ -408,6 +412,7 @@ pub fn capture(
     }
     prnt!("finished listening to criu");
 
+    let ced_listener = EndpointListener::bind(&dir_path, "ced-capture.sock")?;
     let ced = ced_listener.into_accept()?;
     prnt!("connected to daemon");
     poller.add(ced.as_raw_fd(), PollType::Endpoint(ced), EpollFlags::EPOLLIN)?;

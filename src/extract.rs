@@ -20,7 +20,7 @@ use std::{
     collections::{BinaryHeap, HashMap, HashSet},
     os::unix::io::AsRawFd,
     time::Instant,
-    path::Path,
+    path::{Path, PathBuf},
 };
 use crate::{
     endpoint_connection::EndpointListener,
@@ -301,11 +301,12 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
 /// `serve_img()` serves the in-memory image store to CRIU.
 fn serve_img(
     mem_store: &mut image_store::mem::Store,
-    ced_listener: EndpointListener,
-    gpu_listener: Option<EndpointListener>,
-    criu_listener: EndpointListener,
+    dir_path: &Path,
+    use_gpu: bool,
 ) -> Result<()>
 {
+    let ced_listener = EndpointListener::bind(dir_path, "ced-serve.sock")?;
+    eprintln!("r");
     let mut ced = ced_listener.into_accept()?;
 
     prnt!("connected to daemon");
@@ -336,9 +337,10 @@ fn serve_img(
     }
     prnt!("finished listening to daemon");
 
-    match gpu_listener {
-        Some(g) => {
-            let mut gpu = g.into_accept()?;
+    match use_gpu {
+        true => {
+            let gpu_listener = EndpointListener::bind(dir_path, "gpu-serve.sock")?;
+            let mut gpu = gpu_listener.into_accept()?;
             prnt!("connected to gpu");
             while let Some(filename_prefix) = gpu.read_next_file_request()? {
                 match mem_store.remove_by_prefix(&filename_prefix) {
@@ -351,6 +353,9 @@ fn serve_img(
                         let _ = pipe.set_capacity(GPU_PIPE_DESIRED_CAPACITY);
                         memory_file.drain(&mut pipe)
                             .with_context(|| format!("while serving file_prefix {}", &filename_prefix))?;
+                        if filenames_of_sent_files.len() == 7 {
+                            break;
+                        }
                     }
                     None => {
                         // If we keep the image file in our process, CRIU will also
@@ -366,9 +371,10 @@ fn serve_img(
             }
             prnt!("finished listening to gpu");
         },
-        None => { prnt!("not using gpu"); },
+        false => { prnt!("not using gpu"); },
     }
 
+    let criu_listener = EndpointListener::bind(dir_path, "streamer-serve.sock")?;
     let mut criu = criu_listener.into_accept()?;
     prnt!("connected to criu");
     // XXX Currently, CRIU reads image files sequentially. If it were to read files in an
@@ -420,14 +426,13 @@ fn drain_shards_into_img_store<Store: ImageStore>(
 /// Description of the arguments can be found in main.rs
 pub fn serve(
     shard_pipes: Vec<UnixPipe>,
-    ced_listener: EndpointListener,
-    gpu_listener: Option<EndpointListener>,
-    criu_listener: EndpointListener,
+    dir_path: PathBuf,
+    use_gpu: bool,
 ) -> Result<()>
 {
     let mut mem_store = image_store::mem::Store::default();
     let _ = drain_shards_into_img_store(&mut mem_store, shard_pipes)?;
-    serve_img(&mut mem_store, ced_listener, gpu_listener, criu_listener)?;
+    serve_img(&mut mem_store, &dir_path, use_gpu)?;
 
     Ok(())
 }
