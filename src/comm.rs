@@ -7,7 +7,6 @@ use aws_sdk_s3::{
 use crossbeam_utils::Backoff;
 use image_streamer::{
     capture::capture,
-    endpoint_connection::EndpointListener,
     extract::{extract, serve},
     unix_pipe::UnixPipe,
     util::{self, create_dir_all},
@@ -403,18 +402,11 @@ fn do_capture(dir_path: &Path, num_pipes: usize, use_gpu: bool, bucket: Option<S
 
     let _ret = create_dir_all(dir_path);
 
-    let gpu_listener;
-    if use_gpu {
-        gpu_listener = Some(EndpointListener::bind(dir_path, "gpu-capture.sock")?);
-    } else {
-        gpu_listener = None;
-    }
-    let criu_listener = EndpointListener::bind(dir_path, "streamer-capture.sock")?;
-    let ced_listener = EndpointListener::bind(dir_path, "ced-capture.sock")?;
-    eprintln!("r");
-
+    let path = dir_path.to_path_buf();
     let handle = thread::spawn(move || {
-        let _res = capture(shard_pipes, gpu_listener, criu_listener, ced_listener);
+        let res = capture(shard_pipes, path, use_gpu);
+        prnt!("capture returned {:?}", res);
+        res
     });
 
     let handles = match bucket {
@@ -499,20 +491,14 @@ fn do_serve(dir_path: &Path, num_pipes: usize, file_prefix: String, bucket: Opti
         shard_pipes.push(unsafe { File::from_raw_fd(dup_fd) });
     }
     
+    let use_gpu = &file_prefix == "img-w-gpu-";
     let path = dir_path.to_path_buf();
-    let ced_listener = EndpointListener::bind(dir_path, "ced-serve.sock")?;
-    let gpu_listener;
-    if &file_prefix == "img-w-gpu-" {
-        gpu_listener = Some(EndpointListener::bind(dir_path, "gpu-serve.sock")?);
-    } else {
-        gpu_listener = None;
-    }
-    let criu_listener = EndpointListener::bind(dir_path, "streamer-serve.sock")?;
-    eprintln!("r");
-
     let handle = thread::spawn(move || {
-        let _res = serve(shard_pipes, ced_listener, gpu_listener, criu_listener);
+        let res = serve(shard_pipes, path, use_gpu);
+        prnt!("serve returned {:?}", res);
+        res
     });
+    let path2 = dir_path.to_path_buf();
     let handles = match bucket {
         Some(ref s) => { 
             prnt!("direct remoting");
@@ -520,7 +506,7 @@ fn do_serve(dir_path: &Path, num_pipes: usize, file_prefix: String, bucket: Opti
         },
         None => {
             prnt!("not remoting");
-            spawn_serve_handles_local(path, num_pipes, w_fds, &file_prefix)
+            spawn_serve_handles_local(path2, num_pipes, w_fds, &file_prefix)
         },
     };
     prnt!("finished making handles");
