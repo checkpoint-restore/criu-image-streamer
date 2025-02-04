@@ -43,7 +43,8 @@ impl Criu {
         Ok(reply.exists)
     }
 
-    pub fn finish(self) -> Result<()> {
+    pub fn finish(&mut self) -> Result<()> {
+        pb_write(&mut self.socket, &criu::ImgStreamerRequestEntry { filename: "stop-listener".to_string() })?;
         // drops the connection
         Ok(())
     }

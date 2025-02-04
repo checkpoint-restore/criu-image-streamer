@@ -65,7 +65,7 @@ struct RestoreContext {
 
 trait TestImpl {
     fn num_shards(&self) -> usize { 4 }
-    fn images_dir(&self) -> PathBuf { PathBuf::from("/tmp/test-criu-image-streamer") }
+    fn images_dir(&self) -> PathBuf { PathBuf::from("/tmp/test-cedana-image-streamer") }
     fn capture_ext_files(&mut self) -> Vec<(String, UnixPipe)> { Vec::new() }
     fn extract_ext_files(&mut self) -> Vec<(String, UnixPipe)> { Vec::new() }
     fn serve_image(&mut self) -> bool { true }
@@ -177,7 +177,7 @@ trait TestImpl {
         Ok(())
     }
 
-    fn finish_restore(&mut self, restore: RestoreContext) -> Result<()> {
+    fn finish_restore(&mut self, mut restore: RestoreContext) -> Result<()> {
         restore.criu.finish()?;
         restore.streamer.extract_thread.join().unwrap();
         Ok(())
