@@ -22,7 +22,7 @@ jobs:
 
       - name: Build cedana-image-streamer
         run: |
-          make build
+          make
 
       - name: Persist cedana-image-streamer
         id: persist-cedana-image-streamer
