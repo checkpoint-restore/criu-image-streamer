@@ -1,7 +1,3 @@
-//  Copyright 2024 Cedana.
-//
-//  Modifications licensed under the Apache License, Version 2.0.
-
 //  Copyright 2020 Two Sigma Investments, LP.
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,10 +16,11 @@ use std::{
     collections::{BinaryHeap, HashMap, HashSet},
     os::unix::io::AsRawFd,
     time::Instant,
-    path::{Path, PathBuf},
+    path::Path,
+    fs,
 };
 use crate::{
-    endpoint_connection::EndpointListener,
+    criu_connection::{CriuListener, CriuConnection},
     unix_pipe::{UnixPipe, UnixPipeImpl},
     util::*,
     image,
@@ -31,9 +28,10 @@ use crate::{
     impl_ord_by,
     image_store,
     image_store::{ImageStore, ImageFile},
-    prnt,
+    image_patcher::patch_img,
+    poller::Poller, 
 };
-use nix::poll::{poll, PollFd, PollFlags};
+use nix::{poll::{poll, PollFd, PollFlags}, sys::epoll::EpollFlags};
 use anyhow::{Result, Context};
 
 // The serialized image is received via multiple data streams (`Shard`). The data streams are
@@ -61,18 +59,16 @@ use anyhow::{Result, Context};
 /// We are not doing zero-copy transfers to CRIU (yet), we have to be mindful of CPU caches.
 /// If we were doing shard to CRIU splices, we could bump the capacity to 4MB.
 #[allow(clippy::identity_op)]
-const CPU_PIPE_DESIRED_CAPACITY: i32 = 1*MB as i32;
-const GPU_PIPE_DESIRED_CAPACITY: i32 = 16*MB as i32;
+const CRIU_PIPE_DESIRED_CAPACITY: i32 = 1*MB as i32;
 
-
-/// Data comes in a stream of chunks, which can be as large as 2MB (from capture.rs).
-/// We use 8MB to have four chunks in to avoid stalling the shards.
-/// CPU cache interference experimentally seems minimal, larger sizes help performance.
-const SHARD_PIPE_DESIRED_CAPACITY: i32 = 8*MB as i32;
+/// Data comes in a stream of chunks, which can be as large as 256KB (from capture.rs).
+/// We use 512KB to have two chunks in to avoid stalling the shards.
+/// Making this buffer bigger would most likely trash CPU caches.
+const SHARD_PIPE_DESIRED_CAPACITY: i32 = 512*KB as i32;
 
 struct Shard {
     pipe: UnixPipe,
-    transfer_duration_millis: u64,
+    transfer_duration_millis: u128,
     bytes_read: u64,
 }
 
@@ -217,7 +213,7 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
     }
 
     fn mark_shard_eof(&self, shard: &mut Shard) {
-        shard.transfer_duration_millis = self.start_time.elapsed().as_millis().try_into().unwrap();
+        shard.transfer_duration_millis = self.start_time.elapsed().as_millis();
     }
 
     fn drain_shard(&mut self, shard: &'a mut Shard) -> Result<()> {
@@ -237,7 +233,6 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
     }
 
     fn get_next_readable_shard(&mut self) -> Result<Option<&'a mut Shard>> {
-        // heavily investigate here TODO
         // If we just return `self.shard.pop()`, we may deadlock if shard pipes are not independent
         // from each other.
         // This scenario only happens when the capture shards are directly connected to the extract
@@ -250,12 +245,11 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
         // We use poll() instead of epoll() because we need to ignore the shards that are in the
         // list of pending markers, and we are not doing async reads to do edge triggers.
         if self.readable_shards.is_empty() {
-            if self.shards.len() <= 0 {
+            if self.shards.len() <= 1 {
                 // If we have no shard to read from, we'll return None.
                 // If we have a single shard to read from, there no need to block in poll()
                 // We return immediately with that shard, even if it is not readable yet as it
                 // won't introduce a deadlock with the capture side.
-                prnt!("self.shards.len ({}) <= 1, returning Ok(self.shards.pop())", self.shards.len());
                 return Ok(self.shards.pop());
             }
 
@@ -290,7 +284,6 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
     /// Returns successfully when the image has been fully deserialized. This is our main loop.
     pub fn drain_all(&mut self) -> Result<()> {
         while let Some(shard) = self.get_next_readable_shard()? {
-            // prnt!("draining a shard");
             self.drain_shard(shard)?;
         }
         ensure!(self.image_eof, "No shards to read from");
@@ -300,151 +293,138 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
 
 /// `serve_img()` serves the in-memory image store to CRIU.
 fn serve_img(
+    images_dir: &Path,
+    progress_pipe: &mut fs::File,
     mem_store: &mut image_store::mem::Store,
-    dir_path: &Path,
-    use_gpu: bool,
 ) -> Result<()>
 {
-    let ced_listener = EndpointListener::bind(dir_path, "ced-serve.sock")?;
-    eprintln!("r");
-    let mut ced = ced_listener.into_accept()?;
+    let listener = CriuListener::bind_for_restore(images_dir)?;
+    emit_progress(progress_pipe, "socket-init");
 
-    prnt!("connected to daemon");
-    let mut filenames_of_sent_files = HashSet::new();
-    if let Some(filename) = ced.read_next_file_request()? {
-        match mem_store.remove(&filename) {
-            Some(memory_file) => {
-                prnt!("daemon filename: {}", &filename);
-                filenames_of_sent_files.insert(filename.clone());
-                ced.send_file_reply(true)?; // true means that the file exists.
-                let mut pipe = ced.recv_pipe()?;
-                // Try setting the pipe capacity. Failing is okay.
-                let _ = pipe.set_capacity(CPU_PIPE_DESIRED_CAPACITY);
-                memory_file.drain(&mut pipe)
-                    .with_context(|| format!("while serving file {}", &filename))?;
-            }
-            None => {
-                // If we keep the image file in our process, CRIU will also
-                // have a copy of the image file. This uses x2 the memory for an image
-                // file. For large files like memory pages, we could very much go over
-                // the machine memory capacity.
-                ensure!(!filenames_of_sent_files.contains(&filename),
-                    "Daemon is requesting the image file `{}` multiple times. \
-                    This is not allowed to keep the memory usage low", &filename);
-                ced.send_file_reply(false)?;
-            }
-        }
+    // Setup the poller to monitor the server socket
+    enum PollType {
+        Listener(CriuListener),
+        Criu(CriuConnection),
     }
-    prnt!("finished listening to daemon");
 
-    match use_gpu {
-        true => {
-            let gpu_listener = EndpointListener::bind(dir_path, "gpu-serve.sock")?;
-            let mut gpu = gpu_listener.into_accept()?;
-            prnt!("connected to gpu");
-            while let Some(filename_prefix) = gpu.read_next_file_request()? {
-                match mem_store.remove_by_prefix(&filename_prefix) {
-                    Some((filename, memory_file)) => {
-                        prnt!("gpu filename: {}", &filename);
-                        filenames_of_sent_files.insert(filename.to_string().clone());
-                        gpu.send_file_reply(true)?;
-                        let mut pipe = gpu.recv_pipe()?;
-                        // Try setting the pipe capacity. Failing is okay.
-                        let _ = pipe.set_capacity(GPU_PIPE_DESIRED_CAPACITY);
-                        memory_file.drain(&mut pipe)
-                            .with_context(|| format!("while serving file_prefix {}", &filename_prefix))?;
-                        if filenames_of_sent_files.len() == 7 {
-                            break;
+    let mut poller = Poller::new()?;
+    let listener_key = poller.add(listener.as_raw_fd(), PollType::Listener(listener), EpollFlags::EPOLLIN)?;
+
+    let mut filenames_of_sent_files = HashSet::new();
+
+    let epoll_capacity = 16;
+    while let Some((_poll_key, poll_obj)) = poller.poll(epoll_capacity)? {
+        match poll_obj {
+            PollType::Listener(listener) => { // New connection waiting, accept it
+                let conn = listener.accept()?;
+                poller.add(conn.as_raw_fd(), PollType::Criu(conn), EpollFlags::EPOLLIN)?;
+            }
+            PollType::Criu(criu) => {
+                match criu.read_next_file_request()? {
+                    Some(ref filename) if filename == "stop-listener" => {
+                        // Stop accepting any new connections. Pending files will still be
+                        // processed.
+                        poller.remove(listener_key)?;
+                    }
+                    Some(filename) => {
+                        match mem_store.remove(&filename) {
+                            Some(memory_file) => {
+                                filenames_of_sent_files.insert(filename.clone());
+                                criu.send_file_reply(true)?; // true means that the file exists.
+                                let mut pipe = criu.recv_pipe()?;
+                                // Try setting the pipe capacity. Failing is okay.
+                                let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+                                memory_file.drain(&mut pipe)
+                                    .with_context(|| format!("while serving file {}", &filename))?;
+                            }
+                            None => {
+                                // If we keep the image file in our process, CRIU will also
+                                // have a copy of the image file. This uses x2 the memory for an image
+                                // file. For large files like memory pages, we could very much go over
+                                // the machine memory capacity.
+                                ensure!(!filenames_of_sent_files.contains(&filename),
+                                    "CRIU is requesting the image file `{}` multiple times. \
+                                    This is not allowed to keep the memory usage low", &filename);
+                                criu.send_file_reply(false)?; // false means that the file does not exist.
+                            }
                         }
                     }
                     None => {
-                        // If we keep the image file in our process, CRIU will also
-                        // have a copy of the image file. This uses x2 the memory for an image
-                        // file. For large files like memory pages, we could very much go over
-                        // the machine memory capacity.
-                        ensure!(!filenames_of_sent_files.contains(&filename_prefix),
-                            "cedana-gpu-controller is requesting the image file prefix `{}` multiple times. \
-                            This is not allowed to keep the memory usage low", &filename_prefix);
-                        gpu.send_file_reply(false)?;
+                        // Do nothing.
                     }
                 }
             }
-            prnt!("finished listening to gpu");
-        },
-        false => { prnt!("not using gpu"); },
-    }
-
-    let criu_listener = EndpointListener::bind(dir_path, "streamer-serve.sock")?;
-    let mut criu = criu_listener.into_accept()?;
-    prnt!("connected to criu");
-    // XXX Currently, CRIU reads image files sequentially. If it were to read files in an
-    // interleaved fashion, we would have to use the Poller to avoid deadlocks.
-
-    while let Some(filename) = criu.read_next_file_request()? {
-        match mem_store.remove(&filename) {
-            Some(memory_file) => {
-                prnt!("criu filename: {}", &filename);
-                filenames_of_sent_files.insert(filename.clone());
-                criu.send_file_reply(true)?; // true means that the file exists.
-                let mut pipe = criu.recv_pipe()?;
-                // Try setting the pipe capacity. Failing is okay.
-                let _ = pipe.set_capacity(CPU_PIPE_DESIRED_CAPACITY);
-                memory_file.drain(&mut pipe)
-                    .with_context(|| format!("while serving file {}", &filename))?;
-            }
-            None => {
-                // If we keep the image file in our process, CRIU will also
-                // have a copy of the image file. This uses x2 the memory for an image
-                // file. For large files like memory pages, we could very much go over
-                // the machine memory capacity.
-                ensure!(!filenames_of_sent_files.contains(&filename),
-                    "CRIU is requesting the image file `{}` multiple times. \
-                    This is not allowed to keep the memory usage low", &filename);
-                criu.send_file_reply(false)?;
-            }
         }
     }
-    prnt!("finished listening to criu");
 
     Ok(())
 }
 
 fn drain_shards_into_img_store<Store: ImageStore>(
     img_store: &mut Store,
+    progress_pipe: &mut fs::File,
     shard_pipes: Vec<UnixPipe>,
+    ext_file_pipes: Vec<(String, UnixPipe)>,
 ) -> Result<()>
 {
     let mut shards: Vec<Shard> = shard_pipes.into_iter().map(Shard::new).collect();
 
+    // The content of the `ext_file_pipes` are streamed out directly, and not buffered in memory.
+    // This is important to avoid blowing up our memory budget. These external files typically
+    // contain a checkpointed filesystem, which is large.
     let mut overlayed_img_store = image_store::fs_overlay::Store::new(img_store);
+    for (filename, mut pipe) in ext_file_pipes {
+        // Despite the misleading name, the pipe is not for CRIU, it's most likely for `tar`, but
+        // it gets to enjoy the same pipe capacity. If we fail to increase the pipe capacity,
+        // it's okay. This is just for better performance.
+        let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+        overlayed_img_store.add_overlay(filename, pipe);
+    }
+
     let mut img_deserializer = ImageDeserializer::new(&mut overlayed_img_store, &mut shards);
     img_deserializer.drain_all()?;
+
+    let stats = Stats {
+        shards: shards.iter().map(|s| ShardStat {
+            size: s.bytes_read,
+            transfer_duration_millis: s.transfer_duration_millis,
+        }).collect(),
+    };
+    emit_progress(progress_pipe, &serde_json::to_string(&stats)?);
 
     Ok(())
 }
 
 /// Description of the arguments can be found in main.rs
-pub fn serve(
+pub fn serve(images_dir: &Path,
+    mut progress_pipe: fs::File,
     shard_pipes: Vec<UnixPipe>,
-    dir_path: PathBuf,
-    use_gpu: bool,
+    ext_file_pipes: Vec<(String, UnixPipe)>,
+    tcp_listen_remaps: Vec<(u16, u16)>,
 ) -> Result<()>
 {
+    create_dir_all(images_dir)?;
+
     let mut mem_store = image_store::mem::Store::default();
-    let _ = drain_shards_into_img_store(&mut mem_store, shard_pipes)?;
-    serve_img(&mut mem_store, &dir_path, use_gpu)?;
+    drain_shards_into_img_store(&mut mem_store, &mut progress_pipe, shard_pipes, ext_file_pipes)?;
+    patch_img(&mut mem_store, tcp_listen_remaps)?;
+    serve_img(images_dir, &mut progress_pipe, &mut mem_store)?;
 
     Ok(())
 }
 
 /// Description of the arguments can be found in main.rs
 pub fn extract(images_dir: &Path,
+    mut progress_pipe: fs::File,
     shard_pipes: Vec<UnixPipe>,
+    ext_file_pipes: Vec<(String, UnixPipe)>,
 ) -> Result<()>
 {
+    create_dir_all(images_dir)?;
+
     // extract on disk
     let mut file_store = image_store::fs::Store::new(images_dir);
-    let _ = drain_shards_into_img_store(&mut file_store, shard_pipes)?;
+    drain_shards_into_img_store(&mut file_store, &mut progress_pipe, shard_pipes, ext_file_pipes)?;
 
     Ok(())
 }

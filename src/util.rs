@@ -1,7 +1,3 @@
-//  Copyright 2024 Cedana.
-//
-//  Modifications licensed under the Apache License, Version 2.0.
-
 //  Copyright 2020 Two Sigma Investments, LP.
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,7 +12,6 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-use chrono::{DateTime, Local};
 use prost::Message;
 use std::{
     mem::size_of,
@@ -24,11 +19,9 @@ use std::{
     os::unix::io::{RawFd, AsRawFd},
     io::{Read, Write},
     path::Path,
-    time::SystemTime,
     fs,
 };
 use nix::{
-    poll::{poll, PollFd, PollFlags},
     sys::socket::{ControlMessageOwned, MsgFlags, recvmsg},
     sys::uio::IoVec,
     unistd::{sysconf, SysconfVar},
@@ -47,32 +40,12 @@ lazy_static::lazy_static! {
         .expect("Failed to determine PAGE_SIZE") as usize;
 }
 
-pub fn timestamp() -> String {
-    let system_time = SystemTime::now();
-    let datetime: DateTime<Local> = system_time.into();
-    datetime.format("%H:%M:%S%.6f").to_string()
-}
-
-#[macro_export]
-macro_rules! prnt {
-    ($msg:expr) => {{
-        print!("\x1b[90m{}\x1b[0m [\x1b[1m{}:{}\x1b[0m] ", crate::util::timestamp(), file!(), line!());
-        println!($msg);
-    }};
-    ($msg:expr, $($arg:expr),*) => {{
-        print!("\x1b[90m{}\x1b[0m [\x1b[1m{}:{}\x1b[0m] ", crate::util::timestamp(), file!(), line!());
-        print!($msg, $($arg),*);
-        println!();
-    }};
-}
-
 /// read_bytes_next() attempts to read exactly the number of bytes requested.
 /// If we are at EOF, it returns Ok(None).
 /// If it can read the number of bytes requested, it returns Ok(bytes_requested).
 /// Otherwise, it returns Err("EOF error").
 pub fn read_bytes_next<S: Read>(src: &mut S, len: usize) -> Result<Option<BytesMut>> {
     let mut buf = Vec::with_capacity(len);
-
     src.take(len as u64).read_to_end(&mut buf).context("Failed to read protobuf")?;
     Ok(match buf.len() {
         0 => None,
@@ -81,51 +54,11 @@ pub fn read_bytes_next<S: Read>(src: &mut S, len: usize) -> Result<Option<BytesM
     })
 }
 
-pub fn read_bytes_next_breaking(src: &mut UnixStream, len: usize, file_path: &Path) -> Result<Option<BytesMut>> {
-    let fd = src.as_raw_fd();
-    let mut buf = vec![0u8; len];
-
-    loop {
-        let mut poll_fd = [PollFd::new(fd, PollFlags::POLLIN)];
-        let poll_result = poll(&mut poll_fd, 10)?;
-        if poll_result > 0 {
-            if let Some(poll_fd) = poll_fd.get(0) {
-                if poll_fd.revents().unwrap().contains(PollFlags::POLLIN) {
-                    let read_bytes = src.read(&mut buf).context("Failed to read socket")?;
-                    if read_bytes > 0 {
-                        return Ok(Some(buf[..read_bytes].into()));
-                    }
-                }
-            }
-        }
-
-        if file_path.exists() {
-            prnt!("ready path exists, breaking from read_bytes_next_breaking");
-            return Ok(None);
-        }
-    }
-}
-
 /// pb_read_next() is useful to iterate through a stream of protobuf objects.
 /// It returns Ok(obj) for each object to be read, and Ok(None) when EOF is reached.
 /// It returns an error if an object is only partially read, or any deserialization error.
 pub fn pb_read_next<S: Read, T: Message + Default>(src: &mut S) -> Result<Option<(T, usize)>> {
     Ok(match read_bytes_next(src, size_of::<u32>())? {
-
-        None => None,
-        Some(mut size_buf) => {
-            let size = size_buf.get_u32_le() as usize;
-            assert!(size < 10*KB, "Would read a protobuf of size >10KB. Something is wrong");
-            let buf = read_bytes_next(src, size)?.ok_or_else(|| anyhow!(EOF_ERR_MSG))?;
-            let bytes_read = size_of::<u32>() + size_buf.len() + buf.len();
-            Some((T::decode(buf)?, bytes_read))
-        }
-    })
-}
-
-pub fn pb_read_next_breaking<T: Message + Default>(src: &mut UnixStream, ready_path: &Path) -> Result<Option<(T, usize)>> {
-    Ok(match read_bytes_next_breaking(src, size_of::<u32>(), ready_path)? {
-
         None => None,
         Some(mut size_buf) => {
             let size = size_buf.get_u32_le() as usize;
@@ -171,13 +104,23 @@ pub fn recv_fd(socket: &mut UnixStream) -> Result<RawFd> {
     })
 }
 
+pub fn emit_progress(progress_pipe: &mut fs::File, msg: &str) {
+    // Writes to the progress pipe can fail. The parent may have closed that pipe, and we don't
+    // need to get upset about failing reporting progress.
+    let _ = writeln!(progress_pipe, "{}", msg);
+}
+
 pub fn create_dir_all(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir)
         .with_context(|| format!("Failed to create directory {}", dir.display()))
 }
 
 #[derive(Serialize)]
+pub struct Stats {
+    pub shards: Vec<ShardStat>,
+}
+#[derive(Serialize)]
 pub struct ShardStat {
     pub size: u64,
-    pub transfer_duration_millis: u64,
+    pub transfer_duration_millis: u128,
 }
