@@ -17,7 +17,7 @@
 //  limitations under the License.
 
 use std::{
-    collections::BinaryHeap,
+    collections::{BinaryHeap},
     os::unix::io::AsRawFd,
     time::Instant,
     cmp::{min, max},
