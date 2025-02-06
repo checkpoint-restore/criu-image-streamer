@@ -32,14 +32,14 @@ use anyhow::{Result, Context};
 const IMG_STREAMER_CAPTURE_SOCKET_NAME: &str = "streamer-capture.sock";
 const IMG_STREAMER_SERVE_SOCKET_NAME: &str = "streamer-serve.sock";
 
-/// The role of the `CriuListener` and `CriuConnection` is to handle communication with CRIU over
+/// The role of the `Listener` and `Connection` is to handle communication with over
 /// the image socket.
 
-pub struct CriuListener {
+pub struct Listener {
     listener: UnixListener,
 }
 
-impl CriuListener {
+impl Listener {
     fn bind(socket_path: &Path) -> Result<Self> {
         // 1) We unlink the socket path to avoid EADDRINUSE on bind() if it already exists.
         // 2) We ignore the unlink error because we are most likely getting a -ENOENT.
@@ -59,18 +59,18 @@ impl CriuListener {
         Self::bind(&images_dir.join(IMG_STREAMER_SERVE_SOCKET_NAME))
     }
 
-    // into_accept() drops the listener. There is no need for having multiple CRIU connections,
+    // into_accept() drops the listener. If there is no need for having multiple connections,
     // so we close the listener here.
-    pub fn into_accept(self) -> Result<CriuConnection> {
+    pub fn into_accept(self) -> Result<Connection> {
         let (socket, _) = self.listener.accept()?;
-        Ok(CriuConnection { socket })
+        Ok(Connection { socket })
     }
 
     // if accepting multiple connections
-    pub fn accept(&self) -> Result<CriuConnection> {
+    pub fn accept(&self) -> Result<Connection> {
         // Accept a new connection without consuming the listener
         let (socket, _) = self.listener.accept()?;
-        Ok(CriuConnection { socket })
+        Ok(Connection { socket })
     }
 
     pub fn as_raw_fd(&self) -> RawFd {
@@ -78,11 +78,11 @@ impl CriuListener {
     }
 }
 
-pub struct CriuConnection {
+pub struct Connection {
     socket: UnixStream,
 }
 
-impl CriuConnection {
+impl Connection {
     /// Read and return the next file request. If reached EOF, returns Ok(None).
     pub fn read_next_file_request(&mut self) -> Result<Option<String>> {
         Ok(pb_read_next(&mut self.socket)?
@@ -94,8 +94,8 @@ impl CriuConnection {
         UnixPipe::new(recv_fd(&mut self.socket)?)
     }
 
-    /// During restore, CRIU requests image files that may or may not exist.
-    /// We must let CRIU know if we hold has the requested file in question.
+    /// During restore, client requests image files that may or may not exist.
+    /// We must let client know if we hold has the requested file in question.
     /// It is done via `send_file_reply()`. Not used during checkpointing.
     pub fn send_file_reply(&mut self, exists: bool) -> Result<()> {
         pb_write(&mut self.socket, &criu::ImgStreamerReplyEntry { exists })?;

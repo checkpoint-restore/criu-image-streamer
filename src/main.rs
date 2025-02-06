@@ -74,7 +74,7 @@ fn parse_port_remap(s: &str) -> Result<(u16, u16)> {
     global_setting(AppSettings::VersionlessSubcommands),
 )]
 struct Opts {
-    /// Images directory where the CRIU UNIX socket is created during streaming operations.
+    /// Images directory where the client UNIX socket is created during streaming operations.
     // The short option -D mimics CRIU's short option for its --images-dir argument.
     #[structopt(short = "D", long)]
     images_dir: PathBuf,
@@ -109,13 +109,13 @@ struct Opts {
 
 #[derive(StructOpt, PartialEq, Debug)]
 enum Operation {
-    /// Capture a CRIU image
+    /// Capture a client image
     Capture,
 
-    /// Serve a captured CRIU image to CRIU
+    /// Serve a captured client image to client
     Serve,
 
-    /// Extract a captured CRIU image to the specified images_dir
+    /// Extract a captured client image to the specified images_dir
     Extract,
 }
 

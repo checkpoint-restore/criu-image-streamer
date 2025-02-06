@@ -28,7 +28,7 @@ use std::{
 };
 use crate::{
     poller::{Poller, EpollFlags},
-    criu_connection::{CriuListener, CriuConnection},
+    connection::{Listener, Connection},
     unix_pipe::{UnixPipe, UnixPipeImpl},
     util::*,
     image,
@@ -37,7 +37,7 @@ use crate::{
 };
 use anyhow::Result;
 
-// When CRIU dumps an application, it first connects to our UNIX socket. CRIU will send us many
+// When client dumps an application, it first connects to our UNIX socket. client will send us many
 // image files during the dumping process. To send an image file, it sends a protobuf request that
 // contains the filename. Immediately after this message, it sends a file descriptor of a pipe
 // which we can use to receive the content of the corresponding file. We stream the
@@ -46,7 +46,7 @@ use anyhow::Result;
 // shards is typically 4, and less than 32. Image file sizes can vary widely (1KB to +10GB) and are
 // sometimes sent interleaved (e.g., pages-X.img and pagemap-X.img).
 //
-// We move data from CRIU into shards without copying data to user-land for performance. For this,
+// We move data from client into shards without copying data to user-land for performance. For this,
 // we use the splice() system call. This makes the implementation tricky because we also want to
 // load-balance data to the shards.
 //
@@ -61,21 +61,21 @@ use anyhow::Result;
 // of the markers is described in ../proto/image.proto
 
 
-/// CRIU has difficulties if the pipe size is bigger than 4MB.
+/// client has difficulties if the pipe size is bigger than 4MB.
 /// Note that the following pipe buffers are not actually using memory. The content of the pipe is
-/// just a list of pointers to the application memory page, which is already allocated as CRIU does
+/// just a list of pointers to the application memory page, which is already allocated as client does
 /// a vmsplice(..., SPLICE_F_GIFT) when providing data.
-const CRIU_PIPE_DESIRED_CAPACITY: i32 = 4*MB as i32;
+const CLIENT_PIPE_DESIRED_CAPACITY: i32 = 4*MB as i32;
 
 /// Large buffers size improves performance as it allows us to increase the size of our chunks.
 /// 1MB provides excellent performance.
 #[allow(clippy::identity_op)]
 const SHARD_PIPE_DESIRED_CAPACITY: i32 = 1*MB as i32;
 
-/// An `ImageFile` represents a file coming from CRIU.
-/// The complete CRIU image is comprised of many of these files.
+/// An `ImageFile` represents a file coming from client.
+/// The complete client image is comprised of many of these files.
 struct ImageFile {
-    /// Incoming pipe from CRIU
+    /// Incoming pipe from client
     pipe: UnixPipe,
     /// Associated filename (e.g., "pages-3.img")
     filename: Rc<str>,
@@ -84,7 +84,7 @@ struct ImageFile {
 impl ImageFile {
     pub fn new(filename: String, mut pipe: UnixPipe) -> Self {
         // Try setting the pipe capacity. Failing is okay, it's just for better performance.
-        let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+        let _ = pipe.set_capacity(CLIENT_PIPE_DESIRED_CAPACITY);
         let filename = Rc::from(filename);
         Self { pipe, filename }
     }
@@ -122,7 +122,7 @@ impl Shard {
 impl_ord_by!(Shard, |a: &Self, b: &Self| a.remaining_space.cmp(&b.remaining_space)
     .then(a.pipe.as_raw_fd().cmp(&b.pipe.as_raw_fd())));
 
-/// The image serializer reads data from CRIU's image files pipes, chunks the data, and writes into
+/// The image serializer reads data from client's image files pipes, chunks the data, and writes into
 /// shard pipes. Each chunk is written to the shard that has the most room available in its pipe.
 /// We keep track of which shard has the most room with a binary heap.
 /// Chunks are ordered by a sequence number. Semantically, the sequence number should be per image
@@ -174,7 +174,7 @@ impl<'a> ImageSerializer<'a> {
         image::Marker { seq, body: Some(body) }
     }
 
-    /// When transferring bytes from the CRIU pipe to one of the shards, we do so with large chunks
+    /// When transferring bytes from the client pipe to one of the shards, we do so with large chunks
     /// to reduce serialization overhead, but not too large to minimize blocking when writing for
     /// better load-balancing.
     fn chunk_max_data_size(&self) -> i32 {
@@ -276,9 +276,9 @@ pub fn capture(
 ) -> Result<()>
 {
     // First, we need to listen on the unix socket and notify the progress pipe that
-    // we are ready. We do this ASAP because our controller is blocking on us to start CRIU.
+    // we are ready. We do this ASAP because our controller is blocking on us to start client.
     create_dir_all(images_dir)?;
-    let listener = CriuListener::bind_for_capture(images_dir)?;
+    let listener = Listener::bind_for_capture(images_dir)?;
 
     emit_progress(&mut progress_pipe, "socket-init");
 
@@ -289,8 +289,8 @@ pub fn capture(
 
     // Setup the poller to monitor the server socket and image files' pipes
     enum PollType {
-        Listener(CriuListener),
-        Criu(CriuConnection),
+        Listener(Listener),
+        Client(Connection),
         ImageFile(ImageFile),
     }
     let mut poller = Poller::new()?;
@@ -309,8 +309,8 @@ pub fn capture(
     // The image serializer reads data from the image files, and writes it in chunks into shards.
     let mut img_serializer = ImageSerializer::new(&mut shards, shard_pipe_capacity);
 
-    // Process all inputs (ext files, CRIU's connection, and CRIU's files) until they reach EOF.
-    // As CRIU requests to write files, we receive new unix pipes that are added to the poller.
+    // Process all inputs (ext files, client's connection, and client's files) until they reach EOF.
+    // As client requests to write files, we receive new unix pipes that are added to the poller.
     // We use an epoll_capacity of 8. This doesn't really matter as the number of concurrent
     // connection is typically at most 2.
     let epoll_capacity = 16;
@@ -318,10 +318,10 @@ pub fn capture(
         match poll_obj {
             PollType::Listener(listener) => { // New connection waiting, accept it
                 let conn = listener.accept()?;
-                poller.add(conn.as_raw_fd(), PollType::Criu(conn), EpollFlags::EPOLLIN)?;
+                poller.add(conn.as_raw_fd(), PollType::Client(conn), EpollFlags::EPOLLIN)?;
             }
-            PollType::Criu(criu) => {
-                match criu.read_next_file_request()? {
+            PollType::Client(client) => {
+                match client.read_next_file_request()? {
                     Some(ref filename) if filename == "stop-listener" => {
                         // Stop accepting any new connections. Pending files will still be
                         // processed.
@@ -340,7 +340,7 @@ pub fn capture(
                             });
                         }
 
-                        let pipe = criu.recv_pipe()?;
+                        let pipe = client.recv_pipe()?;
                         let img_file = ImageFile::new(filename, pipe);
                         poller.add(img_file.pipe.as_raw_fd(), PollType::ImageFile(img_file),
                                    EpollFlags::EPOLLIN)?;

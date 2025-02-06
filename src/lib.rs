@@ -1,3 +1,7 @@
+//  Copyright 2024 Cedana.
+//
+//  Modifications licensed under the Apache License, Version 2.0.
+
 //  Copyright 2020 Two Sigma Investments, LP.
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,7 +30,7 @@ pub mod capture;
 pub mod extract;
 pub mod poller;
 pub mod unix_pipe;
-pub mod criu_connection;
+pub mod connection;
 pub mod ord_by;
 pub mod image_patcher;
 pub mod image_store;

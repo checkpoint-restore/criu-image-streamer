@@ -24,7 +24,7 @@ use std::{
     fs,
 };
 use crate::{
-    criu_connection::{CriuListener, CriuConnection},
+    connection::{Listener, Connection},
     unix_pipe::{UnixPipe, UnixPipeImpl},
     util::*,
     image,
@@ -47,23 +47,23 @@ use anyhow::{Result, Context};
 // original image files.
 //
 // When extracting the image, we either store the image files in memory, or write them on disk.
-// The former is useful when streaming to CRIU directly, the latter is useful to extract an image
+// The former is useful when streaming to client directly, the latter is useful to extract an image
 // on disk.
 //
-// Streaming to CRIU is done by buffering the entire image in memory, and let CRIU consume it.
+// Streaming to client is done by buffering the entire image in memory, and let client consume it.
 // XXX Performance isn't that great due to the memory copy in our address space. To improve
-// performance, we could splice() shard pipe data to CRIU directly. This is difficult as CRIU
+// performance, we could splice() shard pipe data to client directly. This is difficult as client
 // doesn't read the image files in the same order as they are produced. For example, inventory.img
 // is written last in the image, but is read first. One way to go around this issue is to reserve
 // a shard during capture for all small image files (pretty much all except pages, ghost files, and
-// fs.tar). In addition, we might have to rewrite some part of CRIU to restore these large files in
+// fs.tar). In addition, we might have to rewrite some part of client to restore these large files in
 // the same order as they were produced. It might be difficult to preserve this guarantee forever,
 // so it would be wise to keep our in-memory buffering implementation anyways.
 
-/// We are not doing zero-copy transfers to CRIU (yet), we have to be mindful of CPU caches.
-/// If we were doing shard to CRIU splices, we could bump the capacity to 4MB.
+/// We are not doing zero-copy transfers to client (yet), we have to be mindful of CPU caches.
+/// If we were doing shard to client splices, we could bump the capacity to 4MB.
 #[allow(clippy::identity_op)]
-const CRIU_PIPE_DESIRED_CAPACITY: i32 = 1*MB as i32;
+const CLIENT_PIPE_DESIRED_CAPACITY: i32 = 1*MB as i32;
 
 /// Data comes in a stream of chunks, which can be as large as 256KB (from capture.rs).
 /// We use 512KB to have two chunks in to avoid stalling the shards.
@@ -295,20 +295,20 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
     }
 }
 
-/// `serve_img()` serves the in-memory image store to CRIU.
+/// `serve_img()` serves the in-memory image store to Client.
 fn serve_img(
     images_dir: &Path,
     progress_pipe: &mut fs::File,
     mem_store: &mut image_store::mem::Store,
 ) -> Result<()>
 {
-    let listener = CriuListener::bind_for_restore(images_dir)?;
+    let listener = Listener::bind_for_restore(images_dir)?;
     emit_progress(progress_pipe, "socket-init");
 
     // Setup the poller to monitor the server socket
     enum PollType {
-        Listener(CriuListener),
-        Criu(CriuConnection),
+        Listener(Listener),
+        Client(Connection),
     }
 
     let mut poller = Poller::new()?;
@@ -321,10 +321,10 @@ fn serve_img(
         match poll_obj {
             PollType::Listener(listener) => { // New connection waiting, accept it
                 let conn = listener.accept()?;
-                poller.add(conn.as_raw_fd(), PollType::Criu(conn), EpollFlags::EPOLLIN)?;
+                poller.add(conn.as_raw_fd(), PollType::Client(conn), EpollFlags::EPOLLIN)?;
             }
-            PollType::Criu(criu) => {
-                match criu.read_next_file_request()? {
+            PollType::Client(client) => {
+                match client.read_next_file_request()? {
                     Some(ref filename) if filename == "stop-listener" => {
                         // Stop accepting any new connections. Pending files will still be
                         // processed.
@@ -334,22 +334,22 @@ fn serve_img(
                         match mem_store.remove(&filename) {
                             Some(memory_file) => {
                                 filenames_of_sent_files.insert(filename.clone());
-                                criu.send_file_reply(true)?; // true means that the file exists.
-                                let mut pipe = criu.recv_pipe()?;
+                                client.send_file_reply(true)?; // true means that the file exists.
+                                let mut pipe = client.recv_pipe()?;
                                 // Try setting the pipe capacity. Failing is okay.
-                                let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+                                let _ = pipe.set_capacity(CLIENT_PIPE_DESIRED_CAPACITY);
                                 memory_file.drain(&mut pipe)
                                     .with_context(|| format!("while serving file {}", &filename))?;
                             }
                             None => {
-                                // If we keep the image file in our process, CRIU will also
+                                // If we keep the image file in our process, Client will also
                                 // have a copy of the image file. This uses x2 the memory for an image
                                 // file. For large files like memory pages, we could very much go over
                                 // the machine memory capacity.
                                 ensure!(!filenames_of_sent_files.contains(&filename),
-                                    "CRIU is requesting the image file `{}` multiple times. \
+                                    "Client is requesting the image file `{}` multiple times. \
                                     This is not allowed to keep the memory usage low", &filename);
-                                criu.send_file_reply(false)?; // false means that the file does not exist.
+                                client.send_file_reply(false)?; // false means that the file does not exist.
                             }
                         }
                     }
@@ -378,10 +378,10 @@ fn drain_shards_into_img_store<Store: ImageStore>(
     // contain a checkpointed filesystem, which is large.
     let mut overlayed_img_store = image_store::fs_overlay::Store::new(img_store);
     for (filename, mut pipe) in ext_file_pipes {
-        // Despite the misleading name, the pipe is not for CRIU, it's most likely for `tar`, but
+        // Despite the misleading name, the pipe is not for Client, it's most likely for `tar`, but
         // it gets to enjoy the same pipe capacity. If we fail to increase the pipe capacity,
         // it's okay. This is just for better performance.
-        let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+        let _ = pipe.set_capacity(CLIENT_PIPE_DESIRED_CAPACITY);
         overlayed_img_store.add_overlay(filename, pipe);
     }
 
