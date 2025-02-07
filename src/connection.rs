@@ -32,7 +32,7 @@ use anyhow::{Result, Context};
 const IMG_STREAMER_CAPTURE_SOCKET_NAME: &str = "streamer-capture.sock";
 const IMG_STREAMER_SERVE_SOCKET_NAME: &str = "streamer-serve.sock";
 
-/// The role of the `Listener` and `Connection` is to handle communication with over
+/// The role of the `Listener` and `Connection` is to handle communication over
 /// the image socket.
 
 pub struct Listener {
@@ -60,7 +60,7 @@ impl Listener {
     }
 
     // into_accept() drops the listener. If there is no need for having multiple connections,
-    // so we close the listener here.
+    // use this, as it will drop the connection, otherwise use accept().
     pub fn into_accept(self) -> Result<Connection> {
         let (socket, _) = self.listener.accept()?;
         Ok(Connection { socket })
