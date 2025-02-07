@@ -16,72 +16,76 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-use anyhow::{Result, Context};
+use std::{
+    os::unix::net::{UnixStream, UnixListener},
+    os::unix::io::{RawFd, AsRawFd},
+    path::Path,
+    fs,
+};
 use crate::{
     criu,
+    util::{pb_write, recv_fd, pb_read_next},
     unix_pipe::{UnixPipe, UnixPipeImpl},
-    util::{pb_write, recv_fd, pb_read_next, pb_read_next_breaking},
 };
-use std::{
-    fs,
-    io::ErrorKind,
-    os::unix::fs::PermissionsExt,
-    os::unix::io::{RawFd, AsRawFd},
-    os::unix::net::{UnixStream, UnixListener},
-    path::Path,
-};
+use anyhow::{Result, Context};
 
-/// The role of the `EndpointListener` and `EndpointConnection` is to handle communication with 
-/// endpoints cedana, cedana-gpu-controller, and criu over the image sockets.
+const IMG_STREAMER_CAPTURE_SOCKET_NAME: &str = "streamer-capture.sock";
+const IMG_STREAMER_SERVE_SOCKET_NAME: &str = "streamer-serve.sock";
 
-pub struct EndpointListener {
+/// The role of the `Listener` and `Connection` is to handle communication over
+/// the image socket.
+
+pub struct Listener {
     listener: UnixListener,
 }
 
-impl EndpointListener {
-    pub fn bind(images_dir: &Path, socket_name: &str) -> Result<Self> {
-        let socket_path = images_dir.join(socket_name);
-        if let Err(e) = fs::remove_file(&socket_path) {
-            if e.kind() != ErrorKind::NotFound { // Ignore DNE error
-                eprintln!("Failed to remove file: {}", e); // Propagate other errors
-            }
-        }
+impl Listener {
+    fn bind(socket_path: &Path) -> Result<Self> {
         // 1) We unlink the socket path to avoid EADDRINUSE on bind() if it already exists.
         // 2) We ignore the unlink error because we are most likely getting a -ENOENT.
         //    It is safe to do so as correctness is not impacted by unlink() failing.
-        let listener = UnixListener::bind(&socket_path)
+        let _ = fs::remove_file(socket_path);
+        let listener = UnixListener::bind(socket_path)
             .with_context(|| format!("Failed to bind socket to {}", socket_path.display()))?;
-
-        // Adjust permissions to allow cedana-gpu-controller to connect
-        let mut permissions = fs::metadata(&socket_path)?.permissions();
-        permissions.set_mode(0o666);
-        fs::set_permissions(&socket_path, permissions)?;
 
         Ok(Self { listener })
     }
 
-    // into_accept() drops the listener. There is no need for having multiple endpoint 
-    // connections, so we close the listener here.
-    pub fn into_accept(self) -> Result<EndpointConnection> {
+    pub fn bind_for_capture(images_dir: &Path) -> Result<Self> {
+        Self::bind(&images_dir.join(IMG_STREAMER_CAPTURE_SOCKET_NAME))
+    }
+
+    pub fn bind_for_restore(images_dir: &Path) -> Result<Self> {
+        Self::bind(&images_dir.join(IMG_STREAMER_SERVE_SOCKET_NAME))
+    }
+
+    // into_accept() drops the listener. If there is no need for having multiple connections,
+    // use this, as it will drop the connection, otherwise use accept().
+    pub fn into_accept(self) -> Result<Connection> {
         let (socket, _) = self.listener.accept()?;
-        Ok(EndpointConnection { socket })
+        Ok(Connection { socket })
+    }
+
+    // if accepting multiple connections
+    pub fn accept(&self) -> Result<Connection> {
+        // Accept a new connection without consuming the listener
+        let (socket, _) = self.listener.accept()?;
+        Ok(Connection { socket })
+    }
+
+    pub fn as_raw_fd(&self) -> RawFd {
+        self.listener.as_raw_fd()
     }
 }
 
-pub struct EndpointConnection {
+pub struct Connection {
     socket: UnixStream,
 }
 
-impl EndpointConnection {
+impl Connection {
     /// Read and return the next file request. If reached EOF, returns Ok(None).
     pub fn read_next_file_request(&mut self) -> Result<Option<String>> {
         Ok(pb_read_next(&mut self.socket)?
-            .map(|(req, _): (criu::ImgStreamerRequestEntry, _)| req.filename))
-    }
-
-    /// Same as read_next_file_request, but breaks when ready file appears.
-    pub fn read_next_file_request_breaking(&mut self, ready_path: &Path) -> Result<Option<String>> {
-        Ok(pb_read_next_breaking(&mut self.socket, ready_path)?
             .map(|(req, _): (criu::ImgStreamerRequestEntry, _)| req.filename))
     }
 
@@ -90,8 +94,8 @@ impl EndpointConnection {
         UnixPipe::new(recv_fd(&mut self.socket)?)
     }
 
-    /// During restore, endpoints request image files that may or may not exist.
-    /// We must let endpoints know if we hold has the requested file in question.
+    /// During restore, client requests image files that may or may not exist.
+    /// We must let client know if we hold has the requested file in question.
     /// It is done via `send_file_reply()`. Not used during checkpointing.
     pub fn send_file_reply(&mut self, exists: bool) -> Result<()> {
         pb_write(&mut self.socket, &criu::ImgStreamerReplyEntry { exists })?;
