@@ -16,7 +16,7 @@ To build the _cedana-image-streamer_ executable:
 make
 ```
 
-For installation see [locally built plugins](https://docs.cedana.ai/daemon/get-started/plugins#locally-built-plugins). For usage, check out the [checkpoint/restore streaming](https://docs.cedana.ai/daemon/guides/cr-4).
+For installation see [locally built plugins](https://docs.cedana.ai/daemon/get-started/plugins#locally-built-plugins). For usage, check out [checkpoint/restore streaming](https://docs.cedana.ai/daemon/guides/cr-4).
 
 License
 -------
