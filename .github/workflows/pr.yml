@@ -7,8 +7,37 @@ on:
       - master
 
 jobs:
-  clippy_check:
+  build:
+    name: Build
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt -y install protobuf-compiler
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Build cedana-image-streamer
+        run: |
+          make
+
+      - name: Persist cedana-image-streamer
+        id: persist-cedana-image-streamer
+        uses: actions/upload-artifact@v4
+        with:
+          name: streamer
+          path: target/release/cedana-image-streamer
+
+  clippy_check:
+    name: Clippy Check
+    runs-on: ubuntu-latest
+    needs: build
     steps:
       - uses: actions/checkout@v2
       - uses: actions-rs/clippy-check@v1
@@ -19,7 +48,28 @@ jobs:
 
 # TODO: Fix these tests, breaking due to 'stop-listener' addition
 #   test:
+#     name: Test
 #     runs-on: ubuntu-latest
+#     needs: build
 #     steps:
 #       - uses: actions/checkout@v2
 #       - run: make test
+
+  daemon-tests:
+    name: Daemon
+    uses: cedana/cedana/.github/workflows/pr.yml@main
+    needs: build
+    permissions:
+      contents: "read"
+      packages: "read"
+      id-token: "write"
+      pull-requests: "write"
+    with:
+      ref: main
+      skip_bench: true
+      skip_shellcheck: true
+      skip_helper_image_push: true
+      skip_cpu_tests: true
+      skip_streamer_tests: false
+      skip_gpu_tests: true
+    secrets: inherit
