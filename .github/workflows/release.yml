@@ -26,6 +26,12 @@ concurrency:
   group: cedana-image-streamer-release-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  pull-requests: write
+
 jobs:
   build:
     name: Build
@@ -36,15 +42,15 @@ jobs:
 
   download:
     name: Download
-    uses: cedana/cedana/.github/workflows/download.yml@feature/ced-1034-run-all-benchmarks-on-all-repos-involved
+    uses: cedana/cedana/.github/workflows/download.yml@main
     secrets: inherit
     with:
-      cedana_version: feature/ced-1034-run-all-benchmarks-on-all-repos-involved
-      gpu_version: feature/ced-1034-run-all-benchmarks-on-all-repos-involved
+      cedana_version: main
+      gpu_version: main
 
   test:
     name: Test
-    uses: cedana/cedana/.github/workflows/test_streamer.yml@feature/ced-1034-run-all-benchmarks-on-all-repos-involved
+    uses: cedana/cedana/.github/workflows/test_streamer.yml@main
     needs: [build, download]
     secrets: inherit
     with:
