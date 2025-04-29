@@ -1,9 +1,9 @@
-name: Release
+name: Push
 
 on:
   push:
-    tags:
-      - "*"
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       debug_build:
@@ -23,7 +23,7 @@ on:
         default: false
 
 concurrency:
-  group: cedana-image-streamer-release-${{ github.ref }}
+  group: cedana-image-streamer-push-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -54,10 +54,10 @@ jobs:
   publish:
     name: Publish
     uses: ./.github/workflows/publish.yml
-    needs: test
+    needs: build
     secrets: inherit
     with:
       debug: ${{ startsWith(github.event_name, 'workflow') && inputs.debug_publish }}
-      github: true
       cloudsmith: true
-      post_summary: true
+      cloudsmith_repo: cedana-image-streamer-alpha
+      post_summary: false

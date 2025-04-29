@@ -4,38 +4,67 @@ on:
   pull_request:
     types: [opened, synchronize]
     branches:
-      - master
+      - main
+  workflow_dispatch:
+    inputs:
+      debug_build:
+        type: boolean
+        description: "Run build with debugging enabled"
+        required: false
+        default: false
+      debug_test:
+        type: boolean
+        description: "Run tests with debugging enabled"
+        required: false
+        default: false
+      debug_publish:
+        type: boolean
+        description: "Run publish with debugging enabled"
+        required: false
+        default: false
+
+concurrency:
+  group: cedana-image-streamer-pr-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
-          fetch-tags: true
+    uses: ./.github/workflows/build.yml
+    secrets: inherit
+    with:
+      debug: ${{ startsWith(github.event_name, 'workflow') && inputs.debug_build }}
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt -y install protobuf-compiler
-          curl https://sh.rustup.rs -sSf | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+  download:
+    name: Download
+    uses: cedana/cedana/.github/workflows/download.yml@feature/ced-1034-run-all-benchmarks-on-all-repos-involved
+    secrets: inherit
+    with:
+      cedana_version: feature/ced-1034-run-all-benchmarks-on-all-repos-involved
+      gpu_version: feature/ced-1034-run-all-benchmarks-on-all-repos-involved
 
-      - name: Build cedana-image-streamer
-        run: |
-          make
+  test:
+    name: Test
+    uses: cedana/cedana/.github/workflows/test_streamer.yml@feature/ced-1034-run-all-benchmarks-on-all-repos-involved
+    needs: [build, download]
+    secrets: inherit
+    with:
+      debug: ${{ startsWith(github.event_name, 'workflow') && inputs.debug_test }}
+      gpu: true
 
-      - name: Persist cedana-image-streamer
-        id: persist-cedana-image-streamer
-        uses: actions/upload-artifact@v4
-        with:
-          name: streamer
-          path: target/release/cedana-image-streamer
+  publish:
+    name: Publish
+    uses: ./.github/workflows/publish.yml
+    needs: build
+    secrets: inherit
+    with:
+      debug: ${{ startsWith(github.event_name, 'workflow') && inputs.debug_publish }}
+      cloudsmith: true
+      cloudsmith_repo: cedana-image-streamer-alpha
+      post_summary: false
 
-  clippy_check:
-    name: Clippy Check
+  check:
+    name: Check
     runs-on: ubuntu-latest
     needs: build
     steps:
@@ -54,22 +83,3 @@ jobs:
 #     steps:
 #       - uses: actions/checkout@v2
 #       - run: make test
-
-  daemon-tests:
-    name: Daemon
-    uses: cedana/cedana/.github/workflows/pr.yml@main
-    needs: build
-    permissions:
-      contents: "read"
-      packages: "read"
-      id-token: "write"
-      pull-requests: "write"
-    with:
-      ref: main
-      skip_bench: true
-      skip_shellcheck: true
-      skip_helper_image_push: true
-      skip_cpu_tests: true
-      skip_streamer_tests: false
-      skip_gpu_tests: true
-    secrets: inherit
