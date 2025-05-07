@@ -39,7 +39,7 @@ jobs:
         uses: actions/download-artifact@v4
         id: download-binaries
         with:
-          name: streamer
+          name: streamer-amd64
 
       - name: Create GitHub Release
         id: create_release
