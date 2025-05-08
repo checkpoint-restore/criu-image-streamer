@@ -17,7 +17,7 @@ on:
 jobs:
   streamer:
     name: Streamer
-    runs-on: runs-on=${{github.run_id}}/runner=m7-large-${{ matrix.arch }}/extras=s3-cache
+    runs-on: runs-on=${{github.run_id}}/runner=1cpu-8g-${{ matrix.arch }}/extras=s3-cache
     strategy:
       fail-fast: false
       matrix:
