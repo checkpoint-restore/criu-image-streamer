@@ -33,7 +33,13 @@ jobs:
   github:
     name: GitHub
     if: inputs.github
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{github.run_id}}/runner=1cpu-4g-${{ matrix.arch }}/extras=s3-cache
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - amd64
+          - arm64
     steps:
       - name: Download binaries
         uses: actions/download-artifact@v4
@@ -41,37 +47,53 @@ jobs:
         with:
           name: streamer-amd64
 
-      - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
+      - name: Setup debugging session
+        uses: mxschmitt/action-tmate@v3
+        if: inputs.debug
         with:
-          tag_name: ${{ github.head_ref || github.ref_name }}
-          release_name: ${{ github.head_ref || github.ref_name }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          limit-access-to-actor: true
 
-      - name: Upload executable
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./cedana-image-streamer
-          asset_name: cedana-image-streamer
-          asset_content_type: application/octet-stream
+      - name: Create tarballs
+        run: |
+          tar -czf cedana-image-streamer-${{ matrix.arch }}.tar.gz cedana-image-streamer
+
+      - name: Create release
+        id: create-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ github.head_ref || github.ref_name }}
+        run: |
+          gh release create "$tag" \
+              --repo="$GITHUB_REPOSITORY" \
+              --title="${GITHUB_REPOSITORY#*/} ${tag#v}" \
+              --generate-notes
+
+      - name: Upload assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          upload_url: ${{ steps.create-release.outputs.upload_url }}
+        run: |
+          gh release upload --clobber "$tag" \
+              --repo="$GITHUB_REPOSITORY" \
+              *.tar.gz \
 
   cloudsmith:
     name: Cloudsmith
     if: inputs.cloudsmith
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{github.run_id}}/runner=1cpu-4g-${{ matrix.arch }}/extras=s3-cache
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - amd64
+          - arm64
     steps:
+      - uses: runs-on/action@v1
       - name: Download binaries
         uses: actions/download-artifact@v4
         id: download-binaries
         with:
-          name: streamer
+          name: streamer-${{ matrix.arch }}
 
       - name: Push streamer
         id: push-streamer
@@ -83,9 +105,10 @@ jobs:
           owner: "cedana"
           repo: ${{ inputs.cloudsmith_repo }}
           file: "cedana-image-streamer"
-          name: "cedana-image-streamer"
+          name: "cedana-image-streamer-${{ matrix.arch }}"
           version: ${{ github.head_ref || github.ref_name }}
           republish: "true"
+          tags: ${{ matrix.arch }}, ${{ github.head_ref || github.ref_name }}, ${{ github.sha }}
 
   post-summary:
     name: Post Summary
@@ -129,7 +152,7 @@ jobs:
         run: |
           mkdir current
           cd current
-          curl -1sLf -O https://dl.cloudsmith.io/$API_KEY/cedana/cedana-image-streamer/raw/versions/$TAG/cedana-image-streamer
+          curl -1sLf -O https://dl.cloudsmith.io/$API_KEY/cedana/cedana-image-streamer/raw/versions/$TAG/cedana-image-streamer-amd64
 
       - name: Download previous binary
         id: download-previous
@@ -139,7 +162,7 @@ jobs:
         run: |
           mkdir previous
           cd previous
-          curl -1sLf -O https://dl.cloudsmith.io/$API_KEY/cedana/cedana-image-streamer/raw/versions/$TAG/cedana-image-streamer
+          curl -1sLf -O https://dl.cloudsmith.io/$API_KEY/cedana/cedana-image-streamer/raw/versions/$TAG/cedana-image-streamer-amd64
 
       - name: Generate summary
         id: summary

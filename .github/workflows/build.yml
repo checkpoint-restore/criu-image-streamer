@@ -23,7 +23,7 @@ jobs:
       matrix:
         arch:
           - amd64
-          # - arm64
+          - arm64
     steps:
       - uses: runs-on/action@v1
       - uses: actions/checkout@v2
@@ -38,12 +38,6 @@ jobs:
           sudo apt -y install protobuf-compiler
           curl https://sh.rustup.rs -sSf | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Load from cache
-        uses: runs-on/cache@v4
-        with:
-          path: target/release
-          key: streamer-${{ matrix.arch }}
 
       - name: Build cedana-image-streamer
         run: |
