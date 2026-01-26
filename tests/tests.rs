@@ -157,7 +157,7 @@ trait TestImpl {
     }
 
     fn finish_image_extraction(&mut self, restore: &mut StreamerRestoreContext) -> Result<Stats> {
-        Ok(read_stats(&mut restore.progress)?)
+        read_stats(&mut restore.progress)
     }
 
     fn after_finish_image_extraction(&mut self, _restore_stats: &Stats) -> Result<()> {
@@ -344,7 +344,7 @@ mod load_balancing {
     // We skip that test if we don't have enough pipe capacity.
     // The Rust test runner lacks the ability to skip a test at runtime, so we improvised a bit.
 
-    const CHOKE_RATE_PER_MILLI: usize = 1*KB; // 1MB/sec
+    const CHOKE_RATE_PER_MILLI: usize = KB; // 1MB/sec
     const CHOKE_SHARD_INDEX: usize = 0;
 
     struct Test {
@@ -420,8 +420,7 @@ mod load_balancing {
             }
 
             self.shard_threads.take().unwrap()
-                .drain(..).map(|t| t.join().unwrap())
-                .collect::<Result<()>>()?;
+                .drain(..).try_for_each(|t| t.join().unwrap())?;
 
             eprintln!("Shard sizes: {:?} KB", checkpoint_stats.shards.iter()
                       .map(|s| s.size/KB as u64).collect::<Vec<_>>());
@@ -473,7 +472,7 @@ mod restore_mem_usage {
     const BIG_FILE_SIZE: usize = 105*MB;
     const SMALL_FILE_SIZE: usize = 10;
     const NUM_SMALL_FILES: usize = 100_000;
-    const TOLERABLE_PER_FILE_OVERHEAD: isize = 200 as isize;
+    const TOLERABLE_PER_FILE_OVERHEAD: isize = 200_isize;
     const TOLERABLE_CRIU_RECEIVE_OVERHEAD: isize = 12*MB as isize;
 
     struct Test {
@@ -500,7 +499,7 @@ mod restore_mem_usage {
             // Writing the big file in small chunks, to prevent blowing up memory with a large
             // vector that may not get freed.
             let mut big_file_pipe = checkpoint.criu.write_img_file("big.img")?;
-            let buf = get_filled_vec(1*KB, 1);
+            let buf = get_filled_vec(KB, 1);
             for _ in 0..(BIG_FILE_SIZE/buf.len()) {
                 big_file_pipe.write_all(&buf)?;
             }
@@ -744,7 +743,7 @@ mod extract_to_disk {
 
     impl Test {
         fn new() -> Self {
-            let small_file = get_rand_vec(1*KB);
+            let small_file = get_rand_vec(KB);
             let medium_file = get_rand_vec(100*KB);
             Self { small_file, medium_file }
         }

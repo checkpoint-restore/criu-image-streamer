@@ -3,10 +3,14 @@ name: Clippy check
 jobs:
   clippy_check:
     runs-on: ubuntu-latest
+    container:
+      image: registry.fedoraproject.org/fedora:latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/clippy-check@v1
-        with:
-          # The token is required to post clippy problems on the github result page.
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all-features
+      - name: Install dependencies
+        run: |
+          dnf install -y cargo clippy make
+      - uses: actions/checkout@v4
+      - name: Run clippy
+        run: |
+          cargo clippy --all-features -- -D warnings
+          cargo clippy --tests -- -D warnings

@@ -49,8 +49,8 @@ pub fn read_line<R: Read>(progress: &mut BufReader<R>) -> Result<String> {
     let mut buf = String::new();
     progress.read_line(&mut buf)?;
 
-    ensure!(buf.len() > 0, "EOF reached");
-    ensure!(buf.chars().last() == Some('\n'), "no trailing \\n found");
+    ensure!(!buf.is_empty(), "EOF reached");
+    ensure!(buf.ends_with('\n'), "no trailing \\n found");
     buf.pop(); // Removes the trailing '\n'
 
     Ok(buf)
