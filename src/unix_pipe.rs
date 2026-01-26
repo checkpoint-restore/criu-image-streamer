@@ -35,7 +35,6 @@ use anyhow::{Context, Result};
 /// 3) Define a new trait `UnixPipeImpl`. This has the downside that we need to import the
 ///    `UnixPipeImpl` everywhere we want to use the `UnixPipe` features. Not a terrible downside,
 ///    so we go with this.
-
 pub type UnixPipe = fs::File;
 
 pub trait UnixPipeImpl: Sized {

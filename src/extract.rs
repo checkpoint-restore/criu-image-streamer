@@ -203,8 +203,8 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
     }
 
     fn process_pending_markers(&mut self) -> Result<()> {
-        while let Some(PendingMarker { marker, mut shard }) = self.get_next_in_order_marker() {
-            self.process_marker(marker, &mut shard)?;
+        while let Some(PendingMarker { marker, shard }) = self.get_next_in_order_marker() {
+            self.process_marker(marker, shard)?;
             self.seq += 1;
             self.shards.push(shard);
         }

@@ -32,7 +32,6 @@ use anyhow::{Context, Result};
 /// object via poll().
 /// There should be a crate with this functionality. Either we didn't look well enough, or we
 /// should publish a crate, because it seems useful beyond this project,
-
 pub struct Poller<T> {
     epoll_fd: RawFd,
     slab: Slab<(RawFd, T)>,

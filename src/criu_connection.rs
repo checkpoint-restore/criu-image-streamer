@@ -30,7 +30,6 @@ const IMG_STREAMER_SERVE_SOCKET_NAME: &str = "streamer-serve.sock";
 
 /// The role of the `CriuListener` and `CriuConnection` is to handle communication with CRIU over
 /// the image socket.
-
 pub struct CriuListener {
     listener: UnixListener,
 }

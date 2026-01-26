@@ -25,7 +25,6 @@ use core::ffi::c_void;
 ///
 /// We don't use the memmap create because it doesn't offer a len+capacity abstraction. We'd have
 /// to do a wrapper on their `MmapMap` type. That doesn't buy us much code reuse.
-
 pub struct MmapBuf {
     addr: ptr::NonNull<u8>,
     len: usize,
