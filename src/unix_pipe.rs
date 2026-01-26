@@ -13,16 +13,15 @@
 //  limitations under the License.
 
 use std::{
-    os::unix::io::{RawFd, FromRawFd, AsRawFd},
+    os::unix::io::{RawFd, FromRawFd, AsRawFd, AsFd, BorrowedFd},
+    io::IoSlice,
     fs,
 };
 use nix::{
     sys::stat::{fstat, SFlag},
     fcntl::{fcntl, FcntlArg},
     fcntl::{vmsplice, splice, SpliceFFlags},
-    sys::uio::IoVec,
     errno::Errno,
-    Error,
 };
 use crate::util::PAGE_SIZE;
 use anyhow::{Context, Result};
@@ -49,7 +48,9 @@ pub trait UnixPipeImpl: Sized {
 impl UnixPipeImpl for UnixPipe {
     fn new(fd: RawFd) -> Result<Self> {
         fn ensure_pipe_type(fd: RawFd) -> Result<()> {
-            let stat = fstat(fd).with_context(|| format!("fstat() failed on fd {}", fd))?;
+            // SAFETY: fd is valid for the duration of this call
+            let borrowed_fd = unsafe { BorrowedFd::borrow_raw(fd) };
+            let stat = fstat(borrowed_fd).with_context(|| format!("fstat() failed on fd {}", fd))?;
             let is_pipe = (SFlag::S_IFMT.bits() & stat.st_mode) == SFlag::S_IFIFO.bits();
             ensure!(is_pipe, "fd {} is not a pipe", fd);
             Ok(())
@@ -71,7 +72,7 @@ impl UnixPipeImpl for UnixPipe {
     }
 
     fn set_capacity(&mut self, capacity: i32) -> nix::Result<()> {
-        fcntl(self.as_raw_fd(), FcntlArg::F_SETPIPE_SZ(capacity)).map(|_| ())
+        fcntl(self, FcntlArg::F_SETPIPE_SZ(capacity)).map(|_| ())
     }
 
     /// Sets the capacity of many pipes. /proc/sys/fs/pipe-user-pages-{hard,soft} may be non-zero,
@@ -82,7 +83,7 @@ impl UnixPipeImpl for UnixPipe {
         let mut capacity = max_capacity;
         loop {
             match pipes.iter_mut().try_for_each(|pipe| pipe.set_capacity(capacity)) {
-                Err(Error::Sys(Errno::EPERM)) => {
+                Err(Errno::EPERM) => {
                     assert!(capacity > *PAGE_SIZE as i32);
                     capacity /= 2;
                     continue;
@@ -97,7 +98,7 @@ impl UnixPipeImpl for UnixPipe {
         let mut to_write = len;
 
         while to_write > 0 {
-            let written = splice(self.as_raw_fd(), None, dst.as_raw_fd(), None,
+            let written = splice(self.as_fd(), None, dst.as_fd(), None,
                                  to_write, SpliceFFlags::SPLICE_F_MORE)
                 .with_context(|| format!("splice() failed fd {} -> fd {}",
                                          self.as_raw_fd(), dst.as_raw_fd()))?;
@@ -113,8 +114,8 @@ impl UnixPipeImpl for UnixPipe {
         let mut offset = 0;
 
         while to_write > 0 {
-            let in_iov = IoVec::from_slice(&data[offset..]);
-            let written = vmsplice(self.as_raw_fd(), &[in_iov], SpliceFFlags::SPLICE_F_GIFT)
+            let in_iov = IoSlice::new(&data[offset..]);
+            let written = vmsplice(self.as_fd(), &[in_iov], SpliceFFlags::SPLICE_F_GIFT)
                 .with_context(|| format!("vmsplice() failed on fd {}", self.as_raw_fd()))?;
             assert!(written > 0, "vmsplice() returned 0");
 

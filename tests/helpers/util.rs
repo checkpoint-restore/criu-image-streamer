@@ -14,12 +14,11 @@
 
 use std::{
     os::unix::net::UnixStream,
-    io::{Read, BufReader, BufRead},
-    os::unix::io::{RawFd, AsRawFd},
+    io::{Read, BufReader, BufRead, IoSlice},
+    os::unix::io::{RawFd, AsRawFd, IntoRawFd},
 };
 use nix::{
     sys::socket::{ControlMessage, MsgFlags, sendmsg},
-    sys::uio::IoVec,
     unistd,
 };
 use criu_image_streamer::{
@@ -40,8 +39,8 @@ pub struct ShardStat {
 
 pub fn new_pipe() -> (UnixPipe, UnixPipe) {
     let (fd_r, fd_w) = unistd::pipe().expect("Failed to create UNIX pipe");
-    let pipe_r = UnixPipe::new(fd_r).unwrap();
-    let pipe_w = UnixPipe::new(fd_w).unwrap();
+    let pipe_r = UnixPipe::new(fd_r.into_raw_fd()).unwrap();
+    let pipe_w = UnixPipe::new(fd_w.into_raw_fd()).unwrap();
     (pipe_r, pipe_w)
 }
 
@@ -61,8 +60,8 @@ pub fn read_stats<R: Read>(progress: &mut BufReader<R>) -> Result<Stats> {
 }
 
 pub fn send_fd(socket: &mut UnixStream, fd: RawFd) -> Result<()> {
-    sendmsg(socket.as_raw_fd(),
-           &[IoVec::from_slice(&[0])],
+    sendmsg::<()>(socket.as_raw_fd(),
+           &[IoSlice::new(&[0])],
            &[ControlMessage::ScmRights(&[fd])],
            MsgFlags::empty(),
            None)?;

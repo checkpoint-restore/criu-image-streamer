@@ -22,7 +22,7 @@
 extern crate anyhow;
 
 use std::{
-    os::unix::io::FromRawFd,
+    os::unix::io::{FromRawFd, IntoRawFd, BorrowedFd},
     path::PathBuf,
     fs,
 };
@@ -120,10 +120,17 @@ fn do_main() -> Result<()> {
 
     let opts: Opts = Opts::from_args();
 
+    // Helper to dup a raw fd using BorrowedFd
+    let dup_raw = |fd: i32| -> nix::Result<i32> {
+        // SAFETY: These are standard file descriptors that are always valid
+        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+        Ok(dup(borrowed)?.into_raw_fd())
+    };
+
     let progress_pipe = {
         let progress_fd = match opts.progress_fd {
             Some(fd) => fd,
-            None => dup(libc::STDERR_FILENO)?
+            None => dup_raw(libc::STDERR_FILENO)?
         };
         unsafe { fs::File::from_raw_fd(progress_fd) }
     };
@@ -133,8 +140,8 @@ fn do_main() -> Result<()> {
             opts.shard_fds
         } else {
             match opts.operation {
-                Capture => vec![dup(libc::STDOUT_FILENO)?],
-                Extract | Serve => vec![dup(libc::STDIN_FILENO)?],
+                Capture => vec![dup_raw(libc::STDOUT_FILENO)?],
+                Extract | Serve => vec![dup_raw(libc::STDIN_FILENO)?],
             }
         }.into_iter()
             .map(UnixPipe::new)
