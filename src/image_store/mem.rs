@@ -164,7 +164,7 @@ impl File {
         Ok(())
     }
 
-    pub fn reader(&self) -> FileReader {
+    pub fn reader(&self) -> FileReader<'_> {
         let chunks = match self {
             Small(chunk) => vec![&chunk[..]].into_iter().collect(),
             Large(chunks) => chunks.iter().map(|chunk| &chunk[..]).collect(),
