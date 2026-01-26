@@ -13,16 +13,13 @@
 //  limitations under the License.
 
 use std::{
-    os::unix::io::RawFd,
+    os::unix::io::{RawFd, BorrowedFd},
     convert::TryFrom,
-    ops::Drop,
 };
 use slab::Slab;
 use nix::{
-    sys::epoll::{epoll_create, epoll_ctl, epoll_wait, EpollOp, EpollEvent},
-    unistd::close,
+    sys::epoll::{Epoll, EpollEvent, EpollCreateFlags, EpollTimeout},
     errno::Errno,
-    Error,
 };
 pub use nix::sys::epoll::EpollFlags;
 use anyhow::{Context, Result};
@@ -33,7 +30,7 @@ use anyhow::{Context, Result};
 /// There should be a crate with this functionality. Either we didn't look well enough, or we
 /// should publish a crate, because it seems useful beyond this project,
 pub struct Poller<T> {
-    epoll_fd: RawFd,
+    epoll: Epoll,
     slab: Slab<(RawFd, T)>,
     pending_events: Vec<EpollEvent>,
 }
@@ -42,18 +39,20 @@ pub type Key = usize;
 
 impl<T> Poller<T> {
     pub fn new() -> Result<Self> {
-        let epoll_fd = epoll_create().context("Failed to create epoll")?;
+        let epoll = Epoll::new(EpollCreateFlags::empty()).context("Failed to create epoll")?;
         let slab = Slab::new();
         let pending_events = Vec::new();
 
-        Ok(Self { epoll_fd, slab, pending_events })
+        Ok(Self { epoll, slab, pending_events })
     }
 
     pub fn add(&mut self, fd: RawFd, obj: T, flags: EpollFlags) -> Result<Key> {
         let entry = self.slab.vacant_entry();
         let key = entry.key();
-        let mut event = EpollEvent::new(flags, u64::try_from(key).unwrap());
-        epoll_ctl(self.epoll_fd, EpollOp::EpollCtlAdd, fd, &mut event)
+        let event = EpollEvent::new(flags, u64::try_from(key).unwrap());
+        // SAFETY: fd is valid for the duration of this call
+        let borrowed_fd = unsafe { BorrowedFd::borrow_raw(fd) };
+        self.epoll.add(borrowed_fd, event)
             .context("Failed to add fd to epoll")?;
         entry.insert((fd, obj));
         Ok(key)
@@ -61,7 +60,9 @@ impl<T> Poller<T> {
 
     pub fn remove(&mut self, key: Key) -> Result<T> {
         let (fd, obj) = self.slab.remove(key);
-        epoll_ctl(self.epoll_fd, EpollOp::EpollCtlDel, fd, None)
+        // SAFETY: fd is valid for the duration of this call
+        let borrowed_fd = unsafe { BorrowedFd::borrow_raw(fd) };
+        self.epoll.delete(borrowed_fd)
             .context("Failed to remove fd from epoll")?;
         Ok(obj)
     }
@@ -79,11 +80,10 @@ impl<T> Poller<T> {
         if self.pending_events.is_empty() {
             self.pending_events.resize(capacity, EpollEvent::empty());
 
-            let timeout = -1;
-            let num_ready_fds = epoll_wait_no_intr(self.epoll_fd, &mut self.pending_events, timeout)
+            let num_ready_fds = epoll_wait_no_intr(&self.epoll, &mut self.pending_events)
                 .context("Failed to wait on epoll")?;
 
-            // We don't use a timeout (-1), and we have events registered (slab is not empty)
+            // We don't use a timeout (None = infinite), and we have events registered (slab is not empty)
             // so we should have a least one fd ready.
             assert!(num_ready_fds > 0);
 
@@ -97,18 +97,10 @@ impl<T> Poller<T> {
     }
 }
 
-impl<T> Drop for Poller<T> {
-    fn drop(&mut self) {
-        close(self.epoll_fd).expect("Failed to close epoll");
-    }
-}
-
-pub fn epoll_wait_no_intr(epoll_fd: RawFd, events: &mut [EpollEvent], timeout_ms: isize)
-    -> nix::Result<usize>
-{
+pub fn epoll_wait_no_intr(epoll: &Epoll, events: &mut [EpollEvent]) -> nix::Result<usize> {
     loop {
-        match epoll_wait(epoll_fd, events, timeout_ms) {
-            Err(Error::Sys(Errno::EINTR)) => continue,
+        match epoll.wait(events, EpollTimeout::NONE) {
+            Err(Errno::EINTR) => continue,
             other => return other,
         }
     }

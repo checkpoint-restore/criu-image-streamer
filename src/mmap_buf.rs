@@ -15,10 +15,10 @@
 use std::{
     ptr,
     slice,
+    num::NonZero,
     ops::{Drop, Deref, DerefMut},
 };
-use nix::sys::mman::{mmap, munmap, ProtFlags, MapFlags};
-use core::ffi::c_void;
+use nix::sys::mman::{mmap_anonymous, munmap, ProtFlags, MapFlags};
 
 /// `MmapBuf` is semantically a `Vec<u8>` backed by an mmap region.
 /// See the discussion in `image_store::mem` for why it is useful.
@@ -35,12 +35,12 @@ pub struct MmapBuf {
 impl MmapBuf {
     pub fn with_capacity(capacity: usize) -> Self {
         unsafe {
-            let addr = mmap(ptr::null_mut(), capacity,
+            let len = NonZero::new(capacity).expect("capacity must be non-zero");
+            let addr = mmap_anonymous(None, len,
                             ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-                            MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS,
-                            -1, 0,
-                            ).expect("mmap() failed") as *mut u8;
-            let addr = ptr::NonNull::new_unchecked(addr);
+                            MapFlags::MAP_PRIVATE,
+                            ).expect("mmap() failed");
+            let addr = ptr::NonNull::new_unchecked(addr.as_ptr() as *mut u8);
             Self { addr, len: 0, capacity }
         }
     }
@@ -76,7 +76,8 @@ impl DerefMut for MmapBuf {
 impl Drop for MmapBuf {
     fn drop(&mut self) {
         unsafe {
-            munmap(self.addr.as_ptr() as *mut c_void, self.capacity).expect("munmap() failed");
+            let addr = ptr::NonNull::new_unchecked(self.addr.as_ptr() as *mut std::ffi::c_void);
+            munmap(addr, self.capacity).expect("munmap() failed");
         }
     }
 }

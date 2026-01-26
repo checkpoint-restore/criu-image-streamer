@@ -17,13 +17,12 @@ use std::{
     mem::size_of,
     os::unix::net::UnixStream,
     os::unix::io::{RawFd, AsRawFd},
-    io::{Read, Write},
+    io::{Read, Write, IoSliceMut},
     path::Path,
     fs,
 };
 use nix::{
     sys::socket::{ControlMessageOwned, MsgFlags, recvmsg},
-    sys::uio::IoVec,
     unistd::{sysconf, SysconfVar},
 };
 use bytes::{BytesMut, Buf, BufMut};
@@ -91,14 +90,13 @@ pub fn pb_write<S: Write, T: Message>(dst: &mut S, msg: &T) -> Result<usize> {
 
 pub fn recv_fd(socket: &mut UnixStream) -> Result<RawFd> {
     let mut cmsgspace = nix::cmsg_space!([RawFd; 1]);
+    let mut buf = [0u8; 1];
+    let mut iov = [IoSliceMut::new(&mut buf)];
 
-    let msg = recvmsg(socket.as_raw_fd(),
-                      &[IoVec::from_mut_slice(&mut [0])],
-                      Some(&mut cmsgspace),
-                      MsgFlags::empty())
+    let msg = recvmsg::<()>(socket.as_raw_fd(), &mut iov, Some(&mut cmsgspace), MsgFlags::empty())
         .context("Failed to read fd from socket")?;
 
-    Ok(match msg.cmsgs().next() {
+    Ok(match msg.cmsgs()?.next() {
         Some(ControlMessageOwned::ScmRights(fds)) if fds.len() == 1 => fds[0],
         _ => bail!("No fd received"),
     })

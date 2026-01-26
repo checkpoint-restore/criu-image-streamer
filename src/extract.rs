@@ -14,7 +14,7 @@
 
 use std::{
     collections::{BinaryHeap, HashMap, HashSet},
-    os::unix::io::AsRawFd,
+    os::unix::io::AsFd,
     time::Instant,
     path::Path,
     fs,
@@ -30,7 +30,7 @@ use crate::{
     image_store::{ImageStore, ImageFile},
     image_patcher::patch_img,
 };
-use nix::poll::{poll, PollFd, PollFlags};
+use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 use anyhow::{Result, Context};
 
 // The serialized image is received via multiple data streams (`Shard`). The data streams are
@@ -252,24 +252,30 @@ impl<'a, ImgStore: ImageStore> ImageDeserializer<'a, ImgStore> {
                 return Ok(self.shards.pop());
             }
 
-            let mut poll_fds: Vec<PollFd> = self.shards.iter()
-                .map(|shard| PollFd::new(shard.pipe.as_raw_fd(), PollFlags::POLLIN))
-                .collect();
+            // Collect which shards are readable using poll(). We need to scope the poll_fds
+            // borrow so we can mutate self.shards afterward.
+            let readable_indices: Vec<usize> = {
+                let mut poll_fds: Vec<PollFd> = self.shards.iter()
+                    .map(|shard| PollFd::new(shard.pipe.as_fd(), PollFlags::POLLIN))
+                    .collect();
 
-            let timeout = -1;
-            let n = poll(&mut poll_fds, timeout)?;
-            assert!(n > 0); // There should be at least one fd ready.
+                let n = poll(&mut poll_fds, PollTimeout::NONE)?;
+                assert!(n > 0); // There should be at least one fd ready.
 
-            // We could use drain_filter() instead of the mem::replace dance, but we'll probably
-            // have to use zip(), which complicates the code.
+                poll_fds.iter().enumerate()
+                    .filter(|(_, pfd)| !pfd.revents().unwrap().is_empty())
+                    .map(|(i, _)| i)
+                    .collect()
+            };
+
+            // Move shards to readable_shards or back to shards based on poll results.
+            // We iterate in reverse order so indices remain valid as we remove elements.
             let shards = {
                 let capacity = self.shards.capacity();
                 std::mem::replace(&mut self.shards, Vec::with_capacity(capacity))
             };
-            for (shard, poll_fd) in shards.into_iter().zip(poll_fds) {
-                // We can unwrap() safely. It is fair to assume that the kernel returned valid bits
-                // in `revents`.
-                if !poll_fd.revents().unwrap().is_empty() {
+            for (i, shard) in shards.into_iter().enumerate() {
+                if readable_indices.contains(&i) {
                     self.readable_shards.push(shard);
                 } else {
                     self.shards.push(shard);
