@@ -36,7 +36,7 @@ impl ImageStore for Store<'_> {
     type File = fs::File;
 
     fn create(&mut self, filename: &str) -> Result<Self::File> {
-        let full_path = &self.images_dir.join(&filename);
+        let full_path = &self.images_dir.join(filename);
 
         let file = fs::File::create(full_path)
             .with_context(|| format!("Failed to create file {}", full_path.display()))?;

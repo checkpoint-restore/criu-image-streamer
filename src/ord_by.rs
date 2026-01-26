@@ -15,7 +15,6 @@
 
 /// `impl_ord_by!` provides ordering on a type given a closure.
 /// We use it for providing ordering to types that are used in a BinaryHeap.
-
 #[macro_export]
 macro_rules! impl_ord_by {
     ($type:ident$(<$($gen:tt),+>)?, $cmp_fn:expr) => {
