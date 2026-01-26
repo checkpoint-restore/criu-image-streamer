@@ -48,7 +48,16 @@ uninstall:
 test:
 	$(CARGO) test $(BUILD_FLAGS) -- --test-threads=1 --nocapture
 
+shellcheck:
+	shellcheck -o all tests/integration.bats
+
+shfmt:
+	shfmt -w tests/integration.bats
+
+integration-test: target/$(BUILD)/criu-image-streamer
+	bats --jobs 10 tests/integration.bats
+
 clean:
 	rm -rf target criu-image-streamer
 
-.PHONY: all clean install test uninstall
+.PHONY: all clean install integration-test shellcheck shfmt test uninstall
