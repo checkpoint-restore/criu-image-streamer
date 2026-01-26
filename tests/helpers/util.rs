@@ -36,7 +36,6 @@ pub struct Stats {
 #[derive(Deserialize, Debug)]
 pub struct ShardStat {
     pub size: u64,
-    pub transfer_duration_millis: u128,
 }
 
 pub fn new_pipe() -> (UnixPipe, UnixPipe) {
