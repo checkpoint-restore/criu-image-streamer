@@ -3,6 +3,16 @@ name: Tests
 jobs:
   test:
     runs-on: ubuntu-latest
+    container:
+      image: registry.fedoraproject.org/fedora:latest
+      options: --privileged
+    strategy:
+      matrix:
+        target: [test, shellcheck, shfmt, integration-test]
     steps:
-      - uses: actions/checkout@v2
-      - run: make test
+      - name: Install dependencies
+        run: |
+          dnf install -y cargo ShellCheck shfmt bats make criu lz4
+      - uses: actions/checkout@v4
+      - name: Run make ${{ matrix.target }}
+        run: make ${{ matrix.target }}
