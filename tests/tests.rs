@@ -421,7 +421,7 @@ mod load_balancing {
 
             self.shard_threads.take().unwrap()
                 .drain(..).map(|t| t.join().unwrap())
-                .collect::<Result<_>>()?;
+                .collect::<Result<()>>()?;
 
             eprintln!("Shard sizes: {:?} KB", checkpoint_stats.shards.iter()
                       .map(|s| s.size/KB as u64).collect::<Vec<_>>());
