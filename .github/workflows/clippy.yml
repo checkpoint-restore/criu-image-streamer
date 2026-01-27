@@ -1,5 +1,7 @@
 on: [push, pull_request]
 name: Clippy check
+permissions:
+  contents: read
 jobs:
   clippy_check:
     runs-on: ubuntu-latest
