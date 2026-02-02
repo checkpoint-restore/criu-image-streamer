@@ -11,7 +11,7 @@ jobs:
       - name: Install dependencies
         run: |
           dnf install -y cargo clippy make
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Run clippy
         run: |
           cargo clippy --all-features -- -D warnings

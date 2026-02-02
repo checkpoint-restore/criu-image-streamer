@@ -15,6 +15,6 @@ jobs:
       - name: Install dependencies
         run: |
           dnf install -y cargo ShellCheck shfmt bats make criu lz4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Run make ${{ matrix.target }}
         run: make ${{ matrix.target }}
