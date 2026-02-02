@@ -23,7 +23,7 @@ prost-build = "0.9" # to generate protobuf wrappers
 
 [dev-dependencies]
 procinfo = "0.4" # to measure memory usage
-crossbeam-utils = "0.7" # for scoped threads
+crossbeam-utils = "0.8" # for scoped threads
 tempfile = "3" # for unique temp directories in tests
 
 [profile.release]
