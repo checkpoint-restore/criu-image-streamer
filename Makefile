@@ -54,10 +54,10 @@ test:
 	$(CARGO) test $(BUILD_FLAGS) -- --test-threads=1 --nocapture
 
 shellcheck:
-	shellcheck -o all tests/integration.bats tests/prepare-fedora-coverage-environment.sh
+	shellcheck -o all tests/integration.bats tests/prepare-fedora-coverage-environment.sh proto/sync_criu_proto_files.sh
 
 shfmt:
-	shfmt -w tests/integration.bats tests/prepare-fedora-coverage-environment.sh
+	shfmt -w tests/integration.bats tests/prepare-fedora-coverage-environment.sh proto/sync_criu_proto_files.sh
 
 integration-test: target/$(BUILD)/criu-image-streamer
 	bats --jobs 10 tests/integration.bats
