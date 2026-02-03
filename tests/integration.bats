@@ -5,10 +5,13 @@
 # These tests require: criu, lz4, and root privileges.
 #
 # Run with: sudo bats tests/integration.bats
+# Run with coverage: make coverage-integration (uses cargo-llvm-cov environment)
 
 # shellcheck disable=SC2312
 
 # Path to the criu-image-streamer binary
+# When running with coverage (LLVM_PROFILE_FILE set by cargo-llvm-cov),
+# the binary will automatically write coverage data
 STREAMER="${STREAMER:-./target/release/criu-image-streamer}"
 
 setup() {
