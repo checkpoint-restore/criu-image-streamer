@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup coverage environment
-        run: ./tests/prepare-fedora-coverage-environment.sh
+        run: ./tests/prepare-fedora-test-environment.sh
 
       - name: Run tests and collect coverage
         run: |
