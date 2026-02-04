@@ -22,7 +22,6 @@ serde_json = "1.0"
 prost-build = "0.14" # to generate protobuf wrappers
 
 [dev-dependencies]
-procinfo = "0.4" # to measure memory usage
 crossbeam-utils = "0.8" # for scoped threads
 tempfile = "3" # for unique temp directories in tests
 
