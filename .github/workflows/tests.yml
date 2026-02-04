@@ -1,7 +1,10 @@
-on: [push, pull_request]
 name: Tests
+
+on: [push, pull_request]
+
 permissions:
   contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -10,11 +13,35 @@ jobs:
       options: --privileged
     strategy:
       matrix:
-        target: [test, shellcheck, shfmt, integration-test]
+        target: [test-junit, shellcheck, shfmt]
     steps:
-      - name: Install dependencies
-        run: |
-          dnf install -y cargo ShellCheck shfmt bats make criu lz4 protobuf-devel
+      - name: Install git
+        run: dnf install -y git
       - uses: actions/checkout@v6
+      - name: Setup test environment
+        run: ./tests/prepare-fedora-test-environment.sh
       - name: Run make ${{ matrix.target }}
-        run: make ${{ matrix.target }}
+        run: |
+          . "${HOME}/.cargo/env"
+          make ${{ matrix.target }}
+      - name: Upload Test Results
+        if: always() && matrix.target == 'test-junit'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          retention-days: 1
+          path: |
+            tests/junit.xml
+            tests/junit-integration.xml
+
+  event_file:
+    name: "Event File"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: event-file
+          retention-days: 1
+          path: ${{ github.event_path }}

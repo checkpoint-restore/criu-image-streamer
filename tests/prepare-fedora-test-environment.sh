@@ -1,17 +1,17 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# Prepare a Fedora container for running coverage tests.
+# Prepare a Fedora container for running tests.
 #
 # This script assumes it is running in a privileged Fedora container:
 #   podman run --privileged -it registry.fedoraproject.org/fedora:latest
 #
-# Usage: ./tests/prepare-fedora-coverage-environment.sh
+# Usage: ./tests/prepare-fedora-test-environment.sh
 
 set -euo pipefail
 
 echo "=== Installing system dependencies ==="
-dnf -y install make gcc protobuf-devel criu lz4 bats llvm
+dnf -y install make gcc protobuf-devel criu lz4 bats llvm ShellCheck shfmt
 
 echo ""
 echo "=== Installing Rust via rustup ==="
@@ -27,16 +27,22 @@ rustup component add llvm-tools-preview
 
 echo ""
 echo "=== Installing cargo-llvm-cov ==="
-cargo install cargo-llvm-cov
+cargo install --locked cargo-llvm-cov
+
+echo ""
+echo "=== Installing cargo-nextest ==="
+cargo install --locked cargo-nextest
 
 echo ""
 echo "=== Setup complete ==="
 echo ""
-echo "Before running coverage, source the cargo environment:"
+echo "Before running tests, source the cargo environment:"
 echo ""
 echo "    . \"\${HOME}/.cargo/env\""
 echo ""
-echo "Then run coverage with:"
+echo "Then run tests with:"
 echo ""
+echo "    make test"
+echo "    make test-junit"
 echo "    make coverage"
 echo ""

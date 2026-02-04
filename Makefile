@@ -54,17 +54,22 @@ test:
 	$(CARGO) test $(BUILD_FLAGS) -- --test-threads=1 --nocapture
 
 shellcheck:
-	shellcheck -o all tests/integration.bats tests/prepare-fedora-coverage-environment.sh proto/sync_criu_proto_files.sh
+	shellcheck -o all tests/integration.bats tests/prepare-fedora-test-environment.sh proto/sync_criu_proto_files.sh
 
 shfmt:
-	shfmt -w tests/integration.bats tests/prepare-fedora-coverage-environment.sh proto/sync_criu_proto_files.sh
+	shfmt -w tests/integration.bats tests/prepare-fedora-test-environment.sh proto/sync_criu_proto_files.sh
 
 integration-test: target/$(BUILD)/criu-image-streamer
 	bats --jobs 10 tests/integration.bats
 
+test-junit: target/$(BUILD)/criu-image-streamer
+	$(CARGO) nextest run $(BUILD_FLAGS) --test-threads=1
+	bats -F junit --jobs 10 tests/integration.bats > tests/junit-integration.xml
+
 clean:
 	rm -rf target criu-image-streamer
 	rm -rf $(COVERAGE_PATH)
+	rm -f tests/junit.xml tests/junit-integration.xml
 
 # Coverage targets - requires cargo-llvm-cov: cargo install cargo-llvm-cov
 #
@@ -150,5 +155,5 @@ coverage-html:
 	@echo ""
 	@echo "HTML report: $(COVERAGE_PATH)/html/index.html"
 
-.PHONY: all clean install integration-test shellcheck shfmt test uninstall
+.PHONY: all clean install integration-test shellcheck shfmt test test-junit uninstall
 .PHONY: coverage coverage-unit coverage-integration coverage-html

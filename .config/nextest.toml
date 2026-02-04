@@ -1,0 +1,5 @@
+[profile.default.junit]
+path = "../../../tests/junit.xml"
+
+[profile.ci.junit]
+path = "../../../tests/junit.xml"
