@@ -15,7 +15,7 @@ permissions:
 jobs:
   rust:
     name: Rust
-    runs-on: ubuntu-latest
+    runs-on: rockylinux:8
     if: inputs.rust
     steps:
       - uses: actions/checkout@v4

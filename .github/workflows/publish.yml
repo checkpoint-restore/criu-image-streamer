@@ -33,7 +33,7 @@ jobs:
   github:
     name: GitHub
     if: inputs.github
-    runs-on: ubuntu-latest
+    runs-on: rockylinux:8
     strategy:
       fail-fast: false
       matrix:
@@ -82,7 +82,7 @@ jobs:
   cloudsmith:
     name: Cloudsmith
     if: inputs.cloudsmith
-    runs-on: ubuntu-latest
+    runs-on: rockylinux:8
     strategy:
       fail-fast: false
       matrix:
@@ -116,7 +116,7 @@ jobs:
 
   post-summary:
     name: Post Summary
-    runs-on: ubuntu-latest
+    runs-on: rockylinux:8
     if: inputs.post_summary
     needs: [github, cloudsmith]
     permissions:
