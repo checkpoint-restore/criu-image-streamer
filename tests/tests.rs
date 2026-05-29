@@ -548,7 +548,7 @@ mod restore_mem_usage {
 
         fn after_finish_image_extraction(&mut self, _restore_stats: &Stats) -> Result<()> {
             let extraction_use = get_resident_mem_size() as isize - self.start_mem_size.unwrap() as isize;
-            let overhead = extraction_use  as isize - (BIG_FILE_SIZE + NUM_SMALL_FILES * SMALL_FILE_SIZE) as isize;
+            let overhead = extraction_use - (BIG_FILE_SIZE + NUM_SMALL_FILES * SMALL_FILE_SIZE) as isize;
             let overhead_per_file = overhead / (1 + NUM_SMALL_FILES) as isize;
 
             assert!(overhead_per_file < TOLERABLE_PER_FILE_OVERHEAD,
