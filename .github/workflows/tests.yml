@@ -17,7 +17,7 @@ jobs:
     steps:
       - name: Install git
         run: dnf install -y git
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Setup test environment
         run: ./tests/prepare-fedora-test-environment.sh
       - name: Run make ${{ matrix.target }}
