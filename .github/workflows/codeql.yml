@@ -17,7 +17,7 @@ jobs:
       matrix:
         language: [rust]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Initialize CodeQL
