@@ -320,7 +320,7 @@ fn serve_img(
                 // Try setting the pipe capacity. Failing is okay.
                 let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
                 memory_file.drain(&mut pipe)
-                    .with_context(|| format!("while serving file {}", &filename))?;
+                    .with_context(|| format!("while serving file {}", filename))?;
             }
             None => {
                 // If we keep the image file in our process, CRIU will also
@@ -329,7 +329,7 @@ fn serve_img(
                 // the machine memory capacity.
                 ensure!(!filenames_of_sent_files.contains(&filename),
                     "CRIU is requesting the image file `{}` multiple times. \
-                    This is not allowed to keep the memory usage low", &filename);
+                    This is not allowed to keep the memory usage low", filename);
                 criu.send_file_reply(false)?; // false means that the file does not exist.
             }
         }
