@@ -54,11 +54,16 @@ impl CriuListener {
         Self::bind(&images_dir.join(IMG_STREAMER_SERVE_SOCKET_NAME))
     }
 
-    // into_accept() drops the listener. There is no need for having multiple CRIU connections,
-    // so we close the listener here.
-    pub fn into_accept(self) -> Result<CriuConnection> {
+    /// Takes the next CRIU connection, keeping the listener for further ones.
+    pub fn accept(&self) -> Result<CriuConnection> {
         let (socket, _) = self.listener.accept()?;
         Ok(CriuConnection { socket })
+    }
+
+    // into_accept() drops the listener, which is all a single-connection
+    // operation needs.
+    pub fn into_accept(self) -> Result<CriuConnection> {
+        self.accept()
     }
 }
 

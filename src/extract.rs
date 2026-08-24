@@ -17,10 +17,12 @@ use std::{
     os::unix::io::AsFd,
     time::Instant,
     path::Path,
+    thread,
+    io,
     fs,
 };
 use crate::{
-    criu_connection::CriuListener,
+    criu_connection::{CriuConnection, CriuListener},
     unix_pipe::{UnixPipe, UnixPipeImpl},
     util::*,
     image,
@@ -31,7 +33,7 @@ use crate::{
     image_patcher::patch_img,
 };
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
-use anyhow::{Result, Context};
+use anyhow::{Result, Context, bail};
 
 // The serialized image is received via multiple data streams (`Shard`). The data streams are
 // comprised of markers followed by an optional data payload. The format of the markers is
@@ -301,12 +303,46 @@ fn serve_img(
     images_dir: &Path,
     progress_pipe: &mut fs::File,
     mem_store: &mut image_store::mem::Store,
+    clients: usize,
 ) -> Result<()>
 {
     let listener = CriuListener::bind_for_restore(images_dir)?;
     emit_progress(progress_pipe, "socket-init");
-    let mut criu = listener.into_accept()?;
 
+    if clients == 1 {
+        let criu = listener.into_accept()?;
+        return serve_criu_taking(criu, mem_store);
+    }
+
+    // A streamed post-copy restore has two readers of one image set: the
+    // lazy-pages daemon builds its map from the MM image and the pagemap, and
+    // the restore reads the whole set. They must be served in parallel, as the
+    // daemon keeps its connection for as long as it serves page faults, and
+    // the files must survive being sent so the second reader still finds them.
+    let store = &*mem_store;
+    thread::scope(|scope| -> Result<()> {
+        let mut handles = Vec::with_capacity(clients);
+        for _ in 0..clients {
+            let criu = listener.accept()?;
+            handles.push(scope.spawn(move || serve_criu_sharing(criu, store)));
+        }
+        for handle in handles {
+            match handle.join() {
+                Ok(result) => result?,
+                Err(_) => bail!("A CRIU serving thread panicked"),
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Serves one CRIU process, handing each image file over as it goes. The store
+/// is left empty, which keeps the memory high-water mark at one image file.
+fn serve_criu_taking(
+    mut criu: CriuConnection,
+    mem_store: &mut image_store::mem::Store,
+) -> Result<()>
+{
     let mut filenames_of_sent_files = HashSet::new();
 
     // XXX Currently, CRIU reads image files sequentially. If it were to read files in an
@@ -332,6 +368,31 @@ fn serve_img(
                     This is not allowed to keep the memory usage low", filename);
                 criu.send_file_reply(false)?; // false means that the file does not exist.
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// Serves one CRIU process from a store shared with the other readers, so a
+/// file may be sent more than once. The whole image set stays resident for as
+/// long as any reader is connected.
+fn serve_criu_sharing(
+    mut criu: CriuConnection,
+    mem_store: &image_store::mem::Store,
+) -> Result<()>
+{
+    while let Some(filename) = criu.read_next_file_request()? {
+        match mem_store.get(&filename) {
+            Some(memory_file) => {
+                criu.send_file_reply(true)?; // true means that the file exists.
+                let mut pipe = criu.recv_pipe()?;
+                // Try setting the pipe capacity. Failing is okay.
+                let _ = pipe.set_capacity(CRIU_PIPE_DESIRED_CAPACITY);
+                io::copy(&mut memory_file.reader(), &mut pipe)
+                    .with_context(|| format!("while serving file {}", filename))?;
+            }
+            None => criu.send_file_reply(false)?, // false means that it does not exist.
         }
     }
 
@@ -379,6 +440,7 @@ pub fn serve(images_dir: &Path,
     shard_pipes: Vec<UnixPipe>,
     ext_file_pipes: Vec<(String, UnixPipe)>,
     tcp_listen_remaps: Vec<(u16, u16)>,
+    clients: usize,
 ) -> Result<()>
 {
     create_dir_all(images_dir)?;
@@ -386,7 +448,7 @@ pub fn serve(images_dir: &Path,
     let mut mem_store = image_store::mem::Store::default();
     drain_shards_into_img_store(&mut mem_store, &mut progress_pipe, shard_pipes, ext_file_pipes)?;
     patch_img(&mut mem_store, tcp_listen_remaps)?;
-    serve_img(images_dir, &mut progress_pipe, &mut mem_store)?;
+    serve_img(images_dir, &mut progress_pipe, &mut mem_store, clients)?;
 
     Ok(())
 }

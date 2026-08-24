@@ -99,6 +99,13 @@ struct Opts {
     #[structopt(long, parse(try_from_str=parse_port_remap), require_delimiter = true)]
     tcp_listen_remap: Vec<(u16, u16)>,
 
+    /// Number of CRIU processes that will read the served image. A restore that
+    /// faults its pages in runs a `criu lazy-pages` daemon reading the same
+    /// image as the restore itself, so it needs 2. May only be used with the
+    /// serve operation.
+    #[structopt(long, default_value = "1")]
+    criu_clients: usize,
+
     #[structopt(subcommand)]
     operation: Operation,
 }
@@ -153,13 +160,17 @@ fn do_main() -> Result<()> {
             .map(|(filename, fd)| Ok((filename, UnixPipe::new(fd)?)))
             .collect::<Result<_>>()?;
 
+    ensure!(opts.operation == Serve || opts.criu_clients == 1,
+            "--criu-clients may only be used with the serve operation");
+    ensure!(opts.criu_clients >= 1, "--criu-clients must be at least 1");
     ensure!(opts.operation == Serve || opts.tcp_listen_remap.is_empty(),
             "--tcp-listen-remap is only supported when serving the image");
 
     match opts.operation {
         Capture => capture(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes),
         Extract => extract(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes),
-        Serve   =>   serve(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes, opts.tcp_listen_remap),
+        Serve   =>   serve(&opts.images_dir, progress_pipe, shard_pipes, ext_file_pipes,
+                           opts.tcp_listen_remap, opts.criu_clients),
     }
 }
 
@@ -181,6 +192,7 @@ mod cli_tests {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
                 ext_file_fds: vec![],
+                criu_clients: 1,
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Capture,
@@ -194,6 +206,7 @@ mod cli_tests {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
                 ext_file_fds: vec![],
+                criu_clients: 1,
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Extract,
@@ -207,6 +220,7 @@ mod cli_tests {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
                 ext_file_fds: vec![],
+                criu_clients: 1,
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Serve,
@@ -221,6 +235,7 @@ mod cli_tests {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![1,2,3],
                 ext_file_fds: vec![],
+                criu_clients: 1,
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Capture,
@@ -234,6 +249,7 @@ mod cli_tests {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
                 ext_file_fds: vec![(String::from("file1"), 1), (String::from("file2"), 2)],
+                criu_clients: 1,
                 tcp_listen_remap: vec![],
                 progress_fd: None,
                 operation: Operation::Capture,
@@ -247,6 +263,7 @@ mod cli_tests {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
                 ext_file_fds: vec![],
+                criu_clients: 1,
                 tcp_listen_remap: vec![(2000,3000),(5000,6000)],
                 progress_fd: None,
                 operation: Operation::Serve,
@@ -260,6 +277,7 @@ mod cli_tests {
                 images_dir: PathBuf::from("imgdir"),
                 shard_fds: vec![],
                 ext_file_fds: vec![],
+                criu_clients: 1,
                 tcp_listen_remap: vec![],
                 progress_fd: Some(3),
                 operation: Operation::Capture,
