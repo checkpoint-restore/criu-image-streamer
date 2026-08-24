@@ -105,7 +105,7 @@ trait TestImpl {
 
             thread::spawn(move || {
                 if serve_image {
-                    serve(&images_dir, extract_progress_w, shard_pipes_r, ext_files, vec![])
+                    serve(&images_dir, extract_progress_w, shard_pipes_r, ext_files, vec![], 1)
                         .expect("serve() failed");
                 } else {
                     extract(&images_dir, extract_progress_w, shard_pipes_r, ext_files)
@@ -202,6 +202,66 @@ trait TestImpl {
             self.finish_restore(restore)?;
         }
 
+        Ok(())
+    }
+}
+
+// A streamed post-copy restore has two readers of one image set: the restore
+// itself and the criu lazy-pages daemon that faults its pages in. They overlap,
+// because the daemon holds its connection for as long as it serves faults.
+mod two_criu_clients {
+    use super::*;
+
+    #[test]
+    fn test() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let images_dir = temp_dir.path().to_path_buf();
+
+        let (capture_progress_r, capture_progress_w) = new_pipe();
+        let (serve_progress_r, serve_progress_w) = new_pipe();
+        let mut capture_progress = BufReader::new(capture_progress_r);
+        let mut serve_progress = BufReader::new(serve_progress_r);
+
+        let (shard_r, shard_w) = new_pipe();
+
+        let capture_dir = images_dir.clone();
+        let capture_thread = thread::spawn(move || {
+            capture(&capture_dir, capture_progress_w, vec![shard_w], Vec::new())
+                .expect("capture() failed");
+        });
+
+        let serve_dir = images_dir.clone();
+        let serve_thread = thread::spawn(move || {
+            serve(&serve_dir, serve_progress_w, vec![shard_r], Vec::new(), vec![], 2)
+                .expect("serve() failed");
+        });
+
+        assert_eq!(read_line(&mut capture_progress)?, "socket-init");
+        let mut criu = Criu::connect(images_dir.join("streamer-capture.sock"))?;
+        for (name, data) in [("inventory.img", "inventory"), ("pagemap-1.img", "pagemap")] {
+            criu.write_img_file(name)?.write_all(data.as_bytes())?;
+        }
+        assert_eq!(read_line(&mut capture_progress)?, "checkpoint-start");
+        criu.finish()?;
+        let _: Stats = read_stats(&mut capture_progress)?;
+        capture_thread.join().unwrap();
+
+        let _: Stats = read_stats(&mut serve_progress)?;
+        assert_eq!(read_line(&mut serve_progress)?, "socket-init");
+
+        // The daemon connects first and stays connected while the restore runs,
+        // and both ask for the pagemap.
+        let mut daemon = Criu::connect(images_dir.join("streamer-serve.sock"))?;
+        let mut restore = Criu::connect(images_dir.join("streamer-serve.sock"))?;
+
+        assert_eq!(daemon.read_img_file_into_vec("pagemap-1.img")?, b"pagemap");
+        assert_eq!(restore.read_img_file_into_vec("pagemap-1.img")?, b"pagemap");
+        assert_eq!(restore.read_img_file_into_vec("inventory.img")?, b"inventory");
+        assert!(restore.maybe_read_img_file("no-such.img")?.is_none());
+
+        restore.finish()?;
+        daemon.finish()?;
+        serve_thread.join().unwrap();
         Ok(())
     }
 }

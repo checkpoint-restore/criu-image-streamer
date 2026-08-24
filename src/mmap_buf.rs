@@ -31,6 +31,13 @@ pub struct MmapBuf {
     capacity: usize,
 }
 
+// The mapping is private and exclusively owned, and the buffer is reached only
+// through its Deref/DerefMut slices, so it may cross and be shared between
+// threads on the same terms as the Vec<u8> it stands in for. The raw pointer
+// field is what keeps the compiler from working that out.
+unsafe impl Send for MmapBuf {}
+unsafe impl Sync for MmapBuf {}
+
 #[allow(clippy::len_without_is_empty)]
 impl MmapBuf {
     pub fn with_capacity(capacity: usize) -> Self {

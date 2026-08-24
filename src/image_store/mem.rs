@@ -52,6 +52,10 @@ impl Store {
     pub fn remove(&mut self, filename: &str) -> Option<File> {
         self.files.remove(filename)
     }
+
+    pub fn get(&self, filename: &str) -> Option<&File> {
+        self.files.get(filename)
+    }
 }
 
 impl ImageStore for Store {
