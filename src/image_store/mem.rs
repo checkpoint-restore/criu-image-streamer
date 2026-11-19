@@ -155,11 +155,10 @@ impl File {
             Small(chunk) => dst.write_all(&chunk)?,
             Large(chunks) => {
                 for chunk in chunks {
-                    // We can vmsplice() because the chunk is backed by our mmap buffer.
-                    // It will be unmapped after the vmsplice guaranteeing that memory pages
-                    // are not going to be recycled and modified, which is a problem for
-                    // vmsplice().
-                    dst.vmsplice_all(&chunk)?;
+                    // SAFETY: The chunk is backed by our mmap buffer. It is unmapped when
+                    // `chunk` is dropped at the end of this iteration, so the memory pages
+                    // are not going to be recycled and modified after the vmsplice().
+                    unsafe { dst.vmsplice_all(&chunk)? };
                 }
             }
         };

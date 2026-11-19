@@ -42,7 +42,12 @@ pub trait UnixPipeImpl: Sized {
     fn set_capacity(&mut self, capacity: i32) -> nix::Result<()>;
     fn increase_capacity(pipes: &mut [Self], max_capacity: i32) -> Result<i32>;
     fn splice_all(&mut self, dst: &mut fs::File, len: usize) -> Result<()>;
-    fn vmsplice_all(&mut self, data: &[u8]) -> Result<()>;
+    /// # Safety
+    ///
+    /// The kernel keeps references to the pages of `data` instead of copying them. The caller
+    /// must never modify the memory of `data` after the call, or the reader of the pipe can
+    /// see the modified content.
+    unsafe fn vmsplice_all(&mut self, data: &[u8]) -> Result<()>;
 }
 
 impl UnixPipeImpl for UnixPipe {
@@ -109,14 +114,16 @@ impl UnixPipeImpl for UnixPipe {
         Ok(())
     }
 
-    fn vmsplice_all(&mut self, data: &[u8]) -> Result<()> {
+    unsafe fn vmsplice_all(&mut self, data: &[u8]) -> Result<()> {
         let mut to_write = data.len();
         let mut offset = 0;
 
         while to_write > 0 {
             let in_iov = IoSlice::new(&data[offset..]);
-            let written = vmsplice(self.as_fd(), &[in_iov], SpliceFFlags::SPLICE_F_GIFT)
-                .with_context(|| format!("vmsplice() failed on fd {}", self.as_raw_fd()))?;
+            // SAFETY: The caller guarantees that the memory of `data` is never modified again.
+            let written = unsafe {
+                vmsplice(self.as_fd(), &[in_iov], SpliceFFlags::SPLICE_F_GIFT)
+            }.with_context(|| format!("vmsplice() failed on fd {}", self.as_raw_fd()))?;
             assert!(written > 0, "vmsplice() returned 0");
 
             to_write -= written;
