@@ -53,11 +53,16 @@ uninstall:
 test:
 	$(CARGO) test $(BUILD_FLAGS) -- --test-threads=1 --nocapture
 
+SHELL_SCRIPTS = tests/integration.bats tests/prepare-fedora-test-environment.sh proto/sync_criu_proto_files.sh
+
 shellcheck:
-	shellcheck -o all tests/integration.bats tests/prepare-fedora-test-environment.sh proto/sync_criu_proto_files.sh
+	shellcheck -o all $(SHELL_SCRIPTS)
 
 shfmt:
-	shfmt -w tests/integration.bats tests/prepare-fedora-test-environment.sh proto/sync_criu_proto_files.sh
+	@shfmt -d $(SHELL_SCRIPTS) || { \
+		echo "Run 'shfmt -w $(SHELL_SCRIPTS)' to fix the formatting." >&2; \
+		exit 1; \
+	}
 
 integration-test: target/$(BUILD)/criu-image-streamer
 	bats --jobs 10 tests/integration.bats
