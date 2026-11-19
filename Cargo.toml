@@ -13,7 +13,7 @@ slab = "0.4"
 libc = "0.2"
 prost = "0.14"
 bytes = "1.11"
-nix = { version = "0.31", features = ["socket", "uio", "feature", "poll", "event", "fs", "zerocopy", "mman", "ioctl"] }
+nix = { version = "0.32", features = ["socket", "uio", "feature", "poll", "event", "fs", "zerocopy", "mman", "ioctl"] }
 lazy_static = "1.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
